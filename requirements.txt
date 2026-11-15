@@ -1,0 +1,41 @@
+# MCP
+mcp
+
+# A2A
+a2a-sdk
+
+# Backend and APIs
+fastapi
+uvicorn[standard]
+httpx
+requests
+
+# Data processing
+pandas
+numpy
+scipy
+
+# Network analysis
+scapy
+pyshark
+
+# Machine Learning
+scikit-learn
+xgboost
+
+# Deep Learning
+torch
+
+# Explainability
+shap
+
+# Utilities
+python-dotenv
+pydantic
+tqdm
+matplotlib
+seaborn
+
+# Testing
+pytest
+pytest-asyncio

@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Environment variables
+.env
+.env.*
+
+# IDE
+.vscode/
+
+# Data and captures
+*.pcap
+*.pcapng
+dataset/raw/*
+dataset/processed/*
+traffic/pcaps/*
+
+# Models
+*.pt
+*.pth
+*.pkl
+*.joblib
+
+# OS
+.DS_Store
+Thumbs.db
