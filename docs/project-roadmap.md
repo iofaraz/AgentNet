@@ -45,7 +45,7 @@ The project is divided into 10 phases, progressing from project setup and softwa
 
 All required tools are installed, documentation is prepared, the project structure is verified, and the work is committed to GitHub.
 
-**Status:** In progress — documentation prepared; final verification and Git commit pending.
+**Status:** Complete
 
 ---
 
@@ -81,6 +81,8 @@ All required tools are installed, documentation is prepared, the project structu
 
 The MCP client successfully communicates with the server, invokes tools, and produces capturable network traffic.
 
+**Status:** Complete
+
 ---
 
 # Phase 3 — A2A Software Testbed and Benign Traffic Generation
@@ -113,6 +115,8 @@ The MCP client successfully communicates with the server, invokes tools, and pro
 ### Completion Criteria
 
 Both MCP and A2A environments generate repeatable benign sessions, and their traffic can be captured and identified.
+
+**Status:** Pending
 
 ---
 
