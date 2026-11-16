@@ -1,435 +1,419 @@
-# AgentNet — Complete Project Roadmap
+# AgentNet — Project Roadmap
 
-## Project Overview
+## Project Title
 
-**Project Title:** Protocol-Aware, Encryption-Robust Intrusion Detection for MCP and A2A Agent Networks, with a Labeled Attack Traffic Dataset
+**Protocol-Aware, Encryption-Robust Intrusion Detection for MCP and A2A Agent Networks, with a Labeled Attack Traffic Dataset**
 
-**Project Name:** AgentNet
+## 1. Project Overview
 
-**Objective:** Develop a network intrusion detection system for MCP and A2A agent networks, create a labeled traffic dataset, and evaluate detection performance on both plaintext and TLS-encrypted traffic.
+AgentNet aims to develop a labeled network traffic dataset for AI agent protocols (MCP and A2A) and use it to develop and evaluate an improved network-level Intrusion Detection System (IDS).
 
-The project is divided into 10 phases, progressing from project setup and software testbed development to dataset creation, model development, hardware validation, and final evaluation.
+The project combines software-based agent environments with a physical hardware testbed to generate both benign and controlled attack traffic.
 
----
+The collected traffic will be captured, analyzed, labeled, and converted into a structured dataset. Machine learning and deep learning models will then be developed and evaluated using this dataset.
 
-# Phase 1 — Research, Project Foundation, and Environment Setup
+## 2. Project Objectives
 
-**Objective:** Establish the project foundation, prepare the development environment, and define the system architecture and security scope.
+- Establish software-based MCP and A2A communication environments.
+- Build a physical network testbed using ESP32, Raspberry Pi, sensors, and network equipment.
+- Generate realistic benign network traffic.
+- Simulate seven controlled security attack categories.
+- Capture and label network traffic from software and hardware environments.
+- Develop a labeled dataset for MCP and A2A network security research.
+- Implement traditional machine learning baseline IDS models.
+- Propose an improved protocol-aware and encryption-robust IDS.
+- Evaluate detection performance and generalization across different environments.
 
-### Tasks
+## 3. Technology Stack
 
-- Review the project proposal and relevant research.
-- Finalize project scope and objectives.
-- Install Python, Git, VS Code, Docker, Wireshark, and Ollama.
-- Create the AgentNet project repository.
-- Initialize Git and configure the Python virtual environment.
-- Create the project directory structure.
-- Prepare `architecture.md`.
-- Prepare `threat-model.md`.
-- Prepare `attack-taxonomy.md`.
-- Create `docs/phase-reports/`.
-- Create the Phase 1 report.
-- Commit and push the completed work to GitHub.
+| Area | Technologies |
+|---|---|
+| Programming | Python |
+| Agent Protocols | MCP, A2A |
+| Agent Frameworks | MCP Python SDK, A2A Python SDK |
+| Backend | FastAPI, Starlette |
+| Hardware | ESP32, Raspberry Pi |
+| Sensors | DHT22, BME280 |
+| Network Analysis | Wireshark, tcpdump, Scapy |
+| Network Equipment | Wi-Fi Access Point, Managed Switch |
+| Data Processing | Pandas, NumPy |
+| Machine Learning | Scikit-learn, XGBoost |
+| Deep Learning | PyTorch |
+| Explainability | SHAP |
+| Version Control | Git, GitHub |
 
-### Deliverables
+## 4. Project Phases
 
-- Configured development environment.
+### Phase 1 — Research, Project Foundation, and Environment Setup
+
+**Status: Completed**
+
+**Tasks:**
+- Research MCP and A2A protocols.
+- Review existing intrusion detection approaches.
+- Finalize project scope and proposal.
+- Set up Python, Git, VS Code, Docker, Wireshark, and Ollama.
+- Initialize the GitHub repository.
+- Prepare project architecture documentation.
+- Prepare threat model and attack taxonomy.
+- Create the project roadmap.
+
+**Deliverables:**
 - GitHub repository.
-- Initial project structure.
-- System architecture documentation.
-- Threat model.
-- Attack taxonomy.
-- Phase 1 report.
+- `docs/architecture.md`
+- `docs/threat-model.md`
+- `docs/attack-taxonomy.md`
+- `docs/project-roadmap.md`
+- `docs/phase-reports/phase-1-report.md`
 
-### Completion Criteria
+### Phase 2 — MCP Software Testbed
 
-All required tools are installed, documentation is prepared, the project structure is verified, and the work is committed to GitHub.
+**Status: Completed**
 
-**Status:** Complete
-
----
-
-# Phase 2 — MCP Software Testbed
-
-**Objective:** Build a working MCP environment that generates normal network traffic for experimentation.
-
-### Tasks
-
-- Understand MCP client-server architecture.
-- Set up the Python MCP SDK.
-- Implement a basic MCP server.
-- Create harmless example tools.
-- Implement an MCP client.
-- Connect the client and server using HTTP-based Streamable HTTP transport.
+**Tasks:**
+- Install and configure the MCP Python SDK.
+- Develop a Python MCP server.
+- Implement sample MCP tools.
+- Develop an MCP client.
+- Establish communication using Streamable HTTP.
 - Test tool discovery and invocation.
-- Generate benign MCP communication sessions.
-- Capture traffic using Wireshark.
-- Inspect HTTP and JSON-RPC communication.
-- Save sample PCAP files.
-- Write and run basic tests.
+- Capture benign MCP traffic using Wireshark.
+- Generate repeated benign MCP requests.
+- Create an initial traffic manifest.
 
-### Deliverables
+**Deliverables:**
+- `software_testbed/mcp/server.py`
+- `software_testbed/mcp/client.py`
+- `traffic/pcaps/mcp_benign_sample.pcapng`
+- `traffic/pcaps/mcp_benign_batch_01.pcapng`
+- Initial benign traffic manifest.
+- `docs/phase-reports/phase-2-report.md`
 
-- Working MCP server.
-- Working MCP client.
-- Functional example tools.
-- Benign MCP traffic samples.
-- Initial PCAP captures.
-- Phase 2 report.
+### Phase 3 — A2A Software Testbed
 
-### Completion Criteria
+**Status: Implementation and benign traffic generation completed; documentation and GitHub synchronization to be verified.**
 
-The MCP client successfully communicates with the server, invokes tools, and produces capturable network traffic.
+**Tasks:**
+- Install and configure A2A Python SDK.
+- Develop a deterministic A2A Echo Agent.
+- Configure the A2A server and Agent Card.
+- Develop an A2A client.
+- Test agent discovery and message communication.
+- Generate repeated benign A2A requests.
+- Capture A2A traffic using Wireshark.
+- Update the benign traffic manifest.
 
-**Status:** Complete
+**Deliverables:**
+- `software_testbed/a2a/agent_executor.py`
+- `software_testbed/a2a/server.py`
+- `software_testbed/a2a/client.py`
+- `traffic/pcaps/a2a_benign_batch_01.pcapng`
+- Updated benign traffic manifest.
+- `docs/phase-reports/phase-3-report.md`
 
----
+### Phase 4 — Physical Hardware Network Testbed
 
-# Phase 3 — A2A Software Testbed and Benign Traffic Generation
+**Status: Pending**
 
-**Objective:** Build an A2A environment and generate normal communication traffic across both supported agent protocols.
+**Objective:** Establish a physical network environment in which real devices communicate using the MCP and A2A protocols.
 
-### Tasks
+**Tasks:**
+- Prepare ESP32 development boards.
+- Configure Raspberry Pi as an agent or gateway.
+- Connect sensors such as DHT22 or BME280.
+- Configure harmless physical output devices such as LEDs or buzzers.
+- Develop an MCP server for the ESP32 environment.
+- Establish communication between the Raspberry Pi and ESP32.
+- Integrate software agents with the physical network.
+- Configure network equipment and packet capture.
+- Verify communication between physical devices.
+- Test packet visibility through Wireshark or a mirrored switch port.
 
-- Set up the A2A SDK.
-- Implement basic A2A agents.
-- Configure agent identity and capability information.
-- Implement normal agent-to-agent communication.
-- Integrate MCP and A2A components where appropriate.
-- Introduce local LLM integration if feasible.
-- Generate normal agent interactions.
-- Capture MCP and A2A traffic.
-- Record session metadata.
-- Validate that generated traffic represents legitimate activity.
-- Create a reusable benign traffic-generation pipeline.
+**Deliverables:**
+- Functional physical network testbed.
+- ESP32 MCP server implementation.
+- Raspberry Pi agent/gateway implementation.
+- Hardware network architecture documentation.
+- Successful physical-device communication.
+- Initial hardware network captures.
+- `docs/phase-reports/phase-4-report.md`
 
-### Deliverables
+### Phase 5 — Benign Traffic Generation
 
-- Working A2A agents.
-- Functional agent communication.
-- Integrated software testbed.
-- Benign traffic-generation scripts.
-- Initial benign traffic samples.
-- Phase 3 report.
+**Status: Pending**
 
-### Completion Criteria
+**Objective:** Generate a diverse collection of normal MCP and A2A network traffic from both software and physical hardware environments.
 
-Both MCP and A2A environments generate repeatable benign sessions, and their traffic can be captured and identified.
+**Tasks:**
+- Generate normal MCP communication.
+- Generate normal A2A communication.
+- Generate sensor-data communication.
+- Generate normal tool discovery and invocation patterns.
+- Generate different agent-to-agent message patterns.
+- Vary request frequency, message sizes, and communication patterns.
+- Capture software-based benign traffic.
+- Capture hardware-based benign traffic.
+- Record session metadata and environment information.
 
-**Status:** Complete
+**Deliverables:**
+- Benign software traffic captures.
+- Benign hardware traffic captures.
+- Initial benign session records.
+- Updated traffic manifest.
+- `docs/phase-reports/phase-5-report.md`
 
----
+### Phase 6 — Controlled Attack Scenario Implementation
 
-# Phase 4 — Controlled Attack Scenario Implementation
+**Status: Pending**
 
-**Objective:** Implement controlled, reproducible attack scenarios based on the approved attack taxonomy.
+**Objective:** Implement and validate seven controlled security attack categories in isolated AgentNet test environments.
 
-### Tasks
+**Planned attack categories:**
 
-Implement the seven proposed attack categories:
+| ID | Attack Category |
+|---|---|
+| AT-01 | Tool Poisoning |
+| AT-02 | Rug Pull |
+| AT-03 | Prompt Injection via Tool Output |
+| AT-04 | Confused Deputy |
+| AT-05 | Data Exfiltration |
+| AT-06 | Agent Card Spoofing |
+| AT-07 | Unauthorized Physical Actuation |
 
-1. Tool Poisoning.
-2. Tool Rug Pull.
-3. Prompt Injection Through Tool Output.
-4. Confused Deputy.
-5. Data Exfiltration.
-6. Agent-Card Spoofing.
-7. Unauthorized Physical Actuation.
-
-Additional tasks:
-
-- Define a controlled test scenario for each category.
-- Define expected attack behavior.
-- Define success and failure conditions.
-- Implement scenario-generation scripts.
-- Record scenario metadata.
-- Validate outcomes through application logs or testbed state.
-- Ensure benign sessions remain distinguishable from attack sessions.
-
-### Deliverables
-
-- Seven controlled attack scenarios.
-- Attack-generation scripts.
-- Outcome-validation logic.
-- Attack session metadata.
-- Phase 4 report.
-
-### Completion Criteria
-
-Each attack category has a reproducible test scenario, documented success criteria, and validated session labels.
-
-**Status:** Pending
-
----
-
-# Phase 5 — Traffic Capture and Dataset Creation
-
-**Objective:** Create a labeled dataset containing benign and attack traffic from MCP and A2A environments.
-
-### Tasks
-
-- Capture benign and attack sessions.
-- Collect plaintext traffic.
-- Configure TLS-based experiments.
-- Capture encrypted traffic.
-- Organize raw PCAP files.
-- Extract network sessions and flow information.
-- Assign session IDs.
-- Apply traffic-class and attack-category labels.
+**Tasks:**
+- Develop a reusable attack simulation framework.
+- Implement controlled MCP-related scenarios.
+- Implement controlled A2A-related scenarios.
+- Use synthetic data and mock tools for security experiments.
+- Use safe physical output simulations where relevant.
+- Validate each scenario independently.
 - Record attack success and failure.
-- Extract initial network metadata.
-- Check missing and inconsistent labels.
-- Remove duplicate or invalid records where appropriate.
-- Create training, validation, and testing splits.
-- Prevent session leakage across dataset splits.
-- Perform dataset statistics and quality checks.
+- Record attack category and affected protocol.
+- Ensure all experiments remain within the isolated test environment.
 
-### Dataset Target
+**Deliverables:**
+- Attack simulation framework.
+- Seven validated attack scenarios.
+- Attack execution logs.
+- Scenario validation results.
+- Updated attack taxonomy.
+- `docs/phase-reports/phase-6-report.md`
 
-At least **5,000 labeled sessions**, with approximately half representing benign activity, subject to the feasibility and quality of generated data.
+### Phase 7 — Network Traffic Collection and Dataset Creation
 
-### Deliverables
+**Status: Pending**
 
-- Raw traffic captures.
-- Processed traffic sessions.
-- Labeled dataset.
-- Dataset metadata.
+**Objective:** Build a structured, labeled dataset from benign and attack traffic collected in software and hardware environments.
+
+**Tasks:**
+- Capture traffic for all seven attack categories.
+- Capture corresponding benign traffic.
+- Collect software and hardware PCAP files.
+- Organize and validate packet captures.
+- Extract communication sessions and network flows.
+- Extract network-level features:
+  - Packet sizes.
+  - Packet directions.
+  - Inter-arrival times.
+  - Flow duration.
+  - Packet counts.
+  - Protocol and transport information.
+- Extract protocol-aware features where available:
+  - JSON-RPC methods.
+  - Tool invocation sequences.
+  - Agent communication patterns.
+  - Tool-list changes.
+- Assign benign and attack labels.
+- Record attack categories and outcomes.
+- Remove duplicates and validate dataset quality.
+- Prepare training, validation, and testing splits.
+- Keep raw captures and processed dataset versions organized.
+
+**Dataset target:** At least 5,000 labeled sessions, subject to successful collection and validation.
+
+**Deliverables:**
+- Organized raw PCAP collection.
+- Structured labeled dataset.
+- Dataset metadata and feature definitions.
 - Dataset statistics and validation report.
-- Phase 5 report.
+- Reproducible preprocessing scripts.
+- `docs/phase-reports/phase-7-report.md`
 
-### Completion Criteria
+### Phase 8 — Baseline Intrusion Detection System
 
-The dataset contains validated benign and attack sessions with consistent labels, documented collection procedures, and reproducible splits.
+**Status: Pending**
 
----
+**Objective:** Establish baseline intrusion detection performance using conventional machine learning models.
 
-# Phase 6 — Baseline Intrusion Detection System
-
-**Objective:** Develop baseline machine learning models using conventional network-level features.
-
-### Tasks
-
-- Select relevant network-level features.
-- Build the feature extraction pipeline.
-- Prepare model training datasets.
-- Handle class imbalance where necessary.
-- Train Random Forest.
-- Train XGBoost.
-- Train a small Multi-Layer Perceptron (MLP).
-- Evaluate models using held-out data.
-- Record per-class performance.
+**Tasks:**
+- Load and preprocess the labeled dataset.
+- Perform feature selection and analysis.
+- Define training, validation, and testing datasets.
+- Train baseline models:
+  - Random Forest.
+  - XGBoost.
+  - Multilayer Perceptron (MLP).
+- Evaluate binary and multiclass classification.
+- Compare model performance.
 - Analyze false positives and false negatives.
-- Save trained models and experiment results.
+- Save trained models and evaluation results.
 
-### Evaluation Metrics
+**Deliverables:**
+- Baseline IDS implementation.
+- Trained machine learning models.
+- Performance comparison.
+- Baseline evaluation report.
+- `docs/phase-reports/phase-8-report.md`
+
+### Phase 9 — Proposed Protocol-Aware and Encryption-Robust IDS
+
+**Status: Pending**
+
+**Objective:** Develop an improved detection approach that uses agent-protocol information when available and network-level traffic patterns when payloads are encrypted.
+
+**Tasks:**
+
+**Protocol-aware detection:**
+- Extract MCP and A2A communication features.
+- Analyze JSON-RPC methods and message sequences.
+- Incorporate tool and agent behavior features.
+- Combine protocol-aware features with network-flow features.
+
+**Encryption-robust detection:**
+- Generate and capture TLS-protected traffic.
+- Extract packet size, direction, timing, and sequence features.
+- Develop a 1D-CNN or GRU-based model.
+- Evaluate detection without relying on readable application payloads.
+
+**Model development:**
+- Combine appropriate feature extraction and classification components.
+- Compare the proposed approach with baseline models.
+- Tune model parameters.
+- Analyze feature importance and model behavior.
+
+**Deliverables:**
+- Proposed IDS implementation.
+- Protocol-aware detection model.
+- Encrypted-traffic detection model.
+- Trained model files.
+- Comparison with baseline models.
+- `docs/phase-reports/phase-9-report.md`
+
+### Phase 10 — Final Evaluation, Validation, and Project Deliverables
+
+**Status: Pending**
+
+**Objective:** Perform comprehensive evaluation and prepare the final research contributions.
+
+**Tasks:**
+- Evaluate binary and multiclass detection performance.
+- Measure precision, recall, macro-F1, and per-class F1.
+- Measure false-positive rate, ROC-AUC, and PR-AUC.
+- Compare baseline and proposed IDS models.
+- Evaluate plaintext versus TLS detection.
+- Test unseen attack variations.
+- Evaluate generalization across different agents and servers.
+- Evaluate software-to-hardware generalization.
+- Perform dataset validity checks.
+- Conduct feature-importance analysis using SHAP.
+- Prepare visualizations and experimental results.
+- Document limitations and future improvements.
+- Prepare the final report, presentation, and project demonstration.
+
+**Deliverables:**
+- Final dataset.
+- Final IDS models.
+- Experimental evaluation results.
+- Performance graphs and comparison tables.
+- Final project report.
+- Project presentation and demonstration.
+- `docs/phase-reports/phase-10-report.md`
+
+## 5. Dataset Design
+
+The dataset will contain both benign and attack communication sessions.
+
+**Primary labels:**
+- Benign: `0`
+- Attack: `1`
+
+**Additional metadata:**
+- Session ID.
+- Protocol (MCP/A2A).
+- Attack category (AT-01 to AT-07).
+- Transport (HTTP/TLS).
+- Environment (Software/Hardware).
+- Attack outcome (Success/Failure).
+- Capture file reference.
+- Session and experiment metadata.
+
+The dataset will support both binary classification and attack-category classification.
+
+## 6. Evaluation Metrics
+
+The proposed IDS will be evaluated using:
 
 - Accuracy.
 - Precision.
 - Recall.
 - Macro-F1.
 - Per-class F1.
-- False Positive Rate.
+- False-positive rate.
 - ROC-AUC.
 - PR-AUC.
+- Generalization performance.
+- Software-to-hardware performance comparison.
+- Plaintext versus encrypted traffic performance.
 
-### Deliverables
+Additional validation will examine dataset balance, labeling consistency, reproducibility, and the possibility of data leakage.
 
-- Baseline feature pipeline.
-- Trained baseline models.
-- Evaluation results.
-- Comparison tables and visualizations.
-- Phase 6 report.
+## 7. Documentation Structure
 
-### Completion Criteria
+```text
+docs/
+├── architecture.md
+├── threat-model.md
+├── attack-taxonomy.md
+├── project-roadmap.md
+└── phase-reports/
+    ├── phase-1-report.md
+    ├── phase-2-report.md
+    ├── phase-3-report.md
+    ├── phase-4-report.md
+    ├── phase-5-report.md
+    ├── phase-6-report.md
+    ├── phase-7-report.md
+    ├── phase-8-report.md
+    ├── phase-9-report.md
+    └── phase-10-report.md
+```
 
-Baseline models are trained, evaluated, and documented using a reproducible experimental setup.
+## 8. Project Completion Criteria
 
----
+The project will be considered complete when:
 
-# Phase 7 — Proposed Protocol-Aware Intrusion Detection System
+- MCP and A2A software testbeds are functional.
+- The physical hardware testbed is operational.
+- Benign and controlled attack traffic has been collected.
+- All seven attack categories have been implemented and validated.
+- The labeled dataset has been prepared and documented.
+- Baseline IDS models have been trained and evaluated.
+- The proposed IDS has been implemented and compared against baselines.
+- Encrypted-traffic detection has been evaluated.
+- Software-to-hardware generalization has been investigated.
+- Final documentation, results, and demonstration are ready.
 
-**Objective:** Improve detection by incorporating MCP and A2A protocol-aware information alongside conventional network features.
+## 9. Current Project Status
 
-### Tasks
+**Completed Phases:**
+- Phase 1 — Research, Project Foundation, and Environment Setup.
+- Phase 2 — MCP Software Testbed.
+- Phase 3 — A2A Software Testbed implementation and benign traffic generation (documentation and GitHub synchronization to be verified).
 
-- Identify protocol-specific features.
-- Extract JSON-RPC method sequences where traffic is readable.
-- Track tool-list changes across sessions.
-- Extract message sizes and timing information.
-- Combine protocol-aware features with network-level features.
-- Train and evaluate the proposed detector.
-- Experiment with suitable model architectures.
-- Compare proposed models against baseline models.
-- Analyze improvements and limitations.
-- Perform feature-importance analysis using SHAP where appropriate.
+**Current Phase:**
+Phase 4 — Physical Hardware Network Testbed.
 
-### Proposed Models
+**Next Milestone:**
+Establish communication between the ESP32, Raspberry Pi, and software agents over the physical network.
 
-- Protocol-aware machine learning model.
-- 1D-CNN for traffic sequences.
-- GRU for traffic sequences.
-
-### Deliverables
-
-- Protocol-aware feature extraction pipeline.
-- Proposed detection models.
-- Trained model checkpoints.
-- Baseline-versus-proposed comparison.
-- Feature-importance analysis.
-- Phase 7 report.
-
-### Completion Criteria
-
-The proposed detector is evaluated against the baseline using the same data splits and evaluation metrics.
-
----
-
-# Phase 8 — TLS Detection and Generalization Testing
-
-**Objective:** Evaluate detection when payloads are encrypted and test whether models generalize to previously unseen environments.
-
-### Tasks
-
-- Prepare TLS-based traffic experiments.
-- Extract packet sizes and directions.
-- Calculate packet inter-arrival times.
-- Construct traffic sequences.
-- Train and evaluate sequence-based detection models.
-- Compare plaintext and TLS detection performance.
-- Test on unseen LLMs.
-- Test on unseen MCP servers and A2A agents.
-- Evaluate unseen attack variations.
-- Analyze false positives and generalization performance.
-
-### Deliverables
-
-- TLS traffic feature pipeline.
-- TLS detection models.
-- Plaintext-versus-TLS comparison.
-- Generalization test results.
-- Phase 8 report.
-
-### Completion Criteria
-
-The detector is evaluated on encrypted traffic and previously unseen test scenarios, with results documented.
-
----
-
-# Phase 9 — Hardware Testbed and Software-to-Hardware Validation
-
-**Objective:** Extend the software testbed to physical devices and evaluate whether detection models generalize to real-device traffic.
-
-### Hardware Components
-
-- ESP32 development boards.
-- Raspberry Pi 4 or 5 boards.
-- DHT22 or BME280 sensor.
-- Relay module.
-- LED, buzzer, or servo.
-- Managed network switch with port mirroring.
-- Wi-Fi access point.
-- Required cables and power supplies.
-
-### Tasks
-
-- Prepare ESP32 development environment.
-- Configure ESP32-based MCP tool servers.
-- Configure Raspberry Pi agent hosts.
-- Connect sensors and output devices.
-- Integrate physical devices with the software testbed.
-- Generate normal device communication.
-- Execute controlled hardware test scenarios.
-- Capture hardware network traffic.
-- Validate device states and session outcomes.
-- Extract hardware traffic features.
-- Evaluate software-trained models on hardware traffic.
-- Analyze software-to-hardware performance differences.
-
-### Deliverables
-
-- Working hardware testbed.
-- ESP32 MCP servers.
-- Raspberry Pi agent environment.
-- Hardware traffic captures.
-- Hardware dataset samples.
-- Software-to-hardware evaluation results.
-- Phase 9 report.
-
-### Completion Criteria
-
-The hardware testbed produces validated traffic, and the trained detection models are evaluated on hardware-generated sessions.
-
----
-
-# Phase 10 — Final Evaluation, Analysis, and Project Deliverables
-
-**Objective:** Complete the experimental evaluation, analyze findings, and prepare the final project submission.
-
-### Tasks
-
-- Consolidate all experiment results.
-- Compare baseline and proposed detectors.
-- Compare plaintext and TLS performance.
-- Evaluate unseen-agent and unseen-server performance.
-- Evaluate software-to-hardware generalization.
-- Perform dataset validity checks.
-- Conduct negative-control experiments.
-- Analyze model explainability using SHAP.
-- Calculate confidence intervals where appropriate.
-- Prepare final performance tables and graphs.
-- Document limitations and future improvements.
-- Finalize source code and README.
-- Prepare the final technical report.
-- Prepare presentation slides.
-- Verify reproducibility and repository organization.
-
-### Deliverables
-
-- Final labeled dataset.
-- Complete source code.
-- Trained models.
-- Experiment results.
-- Evaluation graphs and tables.
-- Final technical report.
-- Presentation slides.
-- Updated GitHub repository.
-- Phase 10 report.
-
-### Completion Criteria
-
-All experiments are documented, project objectives are evaluated against the results, and final submission materials are ready.
-
----
-
-# Overall Project Completion Checklist
-
-- [ ] Phase 1 — Research, Project Foundation, and Environment Setup
-- [ ] Phase 2 — MCP Software Testbed
-- [ ] Phase 3 — A2A Software Testbed and Benign Traffic Generation
-- [ ] Phase 4 — Controlled Attack Scenario Implementation
-- [ ] Phase 5 — Traffic Capture and Dataset Creation
-- [ ] Phase 6 — Baseline Intrusion Detection System
-- [ ] Phase 7 — Proposed Protocol-Aware Intrusion Detection System
-- [ ] Phase 8 — TLS Detection and Generalization Testing
-- [ ] Phase 9 — Hardware Testbed and Software-to-Hardware Validation
-- [ ] Phase 10 — Final Evaluation, Analysis, and Project Deliverables
-
-## Project Management Rules
-
-1. Complete phases sequentially unless a dependency requires parallel work.
-2. Test each major component before moving forward.
-3. Maintain clean and organized source code.
-4. Keep raw traffic captures separate from processed datasets.
-5. Record dataset-generation settings and experiment configurations.
-6. Use Git commits to track meaningful project milestones.
-7. **After completing every phase, prepare its report in `docs/phase-reports/`.**
-8. Update this roadmap when phase status changes.
-9. Do not mark a phase complete until its implementation, testing, documentation, and GitHub commit are finished.
-
-## Current Project Status
-
-**Current Phase:** Phase 1 — Research, Project Foundation, and Environment Setup
-
-**Next Phase:** Phase 2 — MCP Software Testbed
-
-**Overall Status:** Foundation and documentation preparation.
+**Overall Status:** Software testbed foundation established; physical hardware integration is the next major milestone.
