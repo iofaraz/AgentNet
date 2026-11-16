@@ -116,7 +116,7 @@ The MCP client successfully communicates with the server, invokes tools, and pro
 
 Both MCP and A2A environments generate repeatable benign sessions, and their traffic can be captured and identified.
 
-**Status:** Pending
+**Status:** Complete
 
 ---
 
@@ -157,6 +157,8 @@ Additional tasks:
 ### Completion Criteria
 
 Each attack category has a reproducible test scenario, documented success criteria, and validated session labels.
+
+**Status:** Pending
 
 ---
 

@@ -1,2 +1,1 @@
-session_id,traffic_class,class_label,attack_id,protocol,transport,environment,outcome,capture_file,notes
-MCP-B001,Benign,0,,MCP,HTTP,Software,N/A,mcp_benign_batch_01.pcapng,10 repeated client runs with three tool invocations each
+A2A-B001,Benign,0,,A2A,HTTP,Software,N/A,a2a_benign_batch_01.pcapng,10 repeated A2A message/send requests to Echo Agent
