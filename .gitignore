@@ -17,6 +17,8 @@ venv/
 dataset/raw/*
 dataset/processed/*
 traffic/pcaps/*
+!dataset/raw/.gitkeep
+!dataset/processed/.gitkeep
 
 # Models
 *.pt
