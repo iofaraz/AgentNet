@@ -24,8 +24,8 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 | **2. Realistic testbed** | 2.1 Richer MCP server (files, synthetic secrets, mock device) | 5 | ✅ Done |
 | | 2.2 LLM-driven MCP agent (Ollama) | 5 | ✅ Done |
 | | 2.3 LLM-driven A2A agents | 5 | ✅ Done |
-| | 2.4 Separate hosts so attacker traffic has its own address | 5 | ⏳ Next |
-| **3. Benign traffic** | 3.1 Catalogue of benign scenarios with variability | 5 | Pending |
+| | 2.4 Separate hosts so attacker traffic has its own address | 5 | ✅ Done |
+| **3. Benign traffic** | 3.1 Catalogue of benign scenarios with variability | 5 | ⏳ Next |
 | | 3.2 Collection run, validation and backup | 5 | Pending |
 | **4. Attacks** | 4.1 Attack framework (variants, success checks, failed attempts) | 6 | Pending |
 | | 4.2–4.8 AT-01 to AT-07, one subpart each | 6 | Pending |
@@ -59,6 +59,8 @@ Items that need a decision from both team members, or that affect the hardware s
 | D12 | **Label leakage through identities.** Bearer tokens travel in plaintext HTTP and appear in captures. If attack sessions used identities that benign sessions never use (e.g. an "attacker" user), a model could detect attacks from the token alone. | Tokens are opaque (no user names inside) and synthetic. | Rule for Part 4: attack sessions use the same identities as benign sessions (e.g. a compromised `bob`). Rule for Part 6: tokens and identities are not model features. |
 | D10 | **Demo agents produce identical sessions.** In 1.4, every MCP session was 47 packets / 10,304 bytes and every A2A session 100 packets / 17,188 bytes. A dataset of such sessions would let a model memorise sizes instead of learning behaviour. | Evidence recorded; the demo sessions are not added to the dataset manifest. | Variability is the goal of Part 2 and subpart 3.1. |
 | D13 | **Label leakage through the session driver.** LLM-driven sessions have ~1–2 s gaps between MCP calls (model thinking time); scripted sessions have millisecond gaps. If benign sessions were mostly LLM-driven and attacks mostly scripted (or the reverse), timing alone would reveal the label. | Recorded. The session runner already stores the scenario name, and LLM sessions record model and seed in `notes`. | Rule for Parts 3–4: benign and attack sessions use the same mix of LLM-driven and scripted drivers, per protocol. Check the mix in 7.1. |
+| D14 | **Per-leg protocol features in multi-service captures.** An A2A session capture holds both the A2A and the MCP leg; selecting HTTP requests "on a port" with tshark returned both legs and double-counted them. | Requests are selected by destination port (`http.request && tcp.dstport == <port>`) in the end-to-end check. | Rule for Part 6: extract protocol features per leg by destination address/port. |
+| D15 | **IP addresses and ports must not be model features.** Testbed hosts have fixed addresses, attacker hosts will use `127.77.9.0/24`, and the hardware testbed uses real network addresses. A model given raw addresses or ports would learn "this address = attack" or "this address range = software", not behaviour. | Recorded. | Rule for Part 6: no raw IPs or port numbers as features; use behavioural features instead (e.g. "destination never seen in benign traffic", number of distinct peers, direction). |
 | D8 | **Where capture hashes are stored.** The contract's manifest has no hash column, and its schema must not change without agreement. | **Resolved in 1.3:** a separate capture log `dataset/labels/capture_log.csv` (one row per session, valid or excluded) holds hash, packet/drop counts, scenario name, software versions and exclusion reasons. The manifest is unchanged. | Hardware side may use the same log format. |
 
 ---
@@ -615,3 +617,66 @@ Also verified: forged token → "Authentication failed"; anonymous weather reque
 - *How can Agent Card spoofing be prevented?* Signed agent cards: the card carries a signature the client verifies (`signature_verifier`) before trusting it.
 - *Why capture both A2A and MCP in an A2A session?* On a network both legs are visible. A confused-deputy or exfiltration attack looks like a normal A2A request followed by an unusual MCP action — only the pair shows the attack.
 - *How do you link a request to the actions it caused?* By time window: the A2A audit (requester, task) and the MCP audit (ops-agent's calls) are both selected by the session's manifest start and end times.
+
+---
+
+### 2.4 — Separate hosts
+
+**Goal:** make captures look like traffic between separate machines — users' workstations, the A2A assistant, the MCP server and, in Part 4, attacker hosts — instead of one machine (`127.0.0.1`) talking to itself. Attacks such as exfiltration are partly recognisable by *where* traffic goes, which needs distinct hosts.
+
+**Approach:** the entire `127.0.0.0/8` range is loopback, so the testbed gets its own block, `127.77.0.0/16`, with one address per role. Everything stays inside the computer; no Docker, virtual machines or administrator rights are needed.
+
+**Address plan** (`software_testbed/addresses.py`, the only place addresses are written)
+
+| Address | Role |
+|---|---|
+| `127.77.1.10:8000` | MCP server |
+| `127.77.2.10:9999` | A2A Lab Assistant; also the source of its MCP calls (`ops-agent`) |
+| `127.77.3.11` / `.12` / `.13` / `.14` / `.20` | Workstations of alice / bob / dana / reporter-agent / anonymous requesters |
+| `127.77.9.0/24` | Reserved for attacker hosts (Part 4) |
+
+**Capture filter:** every session now uses `net 127.77.0.0/16` — all traffic between testbed hosts on any port (including future attacker services), and nothing from `127.0.0.1`, where Ollama, editors and Docker run.
+
+**Verified first (before changing anything):** on this Windows machine, without administrator rights, a server can listen on `127.77.1.10`; httpx and httpx2 clients can send from a chosen source address (`local_address`), confirmed by the server seeing `127.77.3.11` and `127.77.2.10`; Npcap captures `127.77.x.x` traffic; the net filter excludes `127.0.0.1` traffic. The MCP SDK's host checks accept the new address.
+
+**Files changed**
+
+| File | Change |
+|---|---|
+| `software_testbed/addresses.py` | New: the address plan and capture filter |
+| `software_testbed/mcp/server.py`, `software_testbed/a2a/server.py` | Bind their planned addresses; the Agent Card advertises the new URL |
+| `software_testbed/mcp/client.py`, `software_testbed/a2a/client.py` | Send from the requester's workstation address |
+| `software_testbed/a2a/server.py` (MCP connector) | The assistant's MCP calls leave from its own host |
+| `scripts/testbed.py` | `ServerSpec.host` (required); host-aware port checks (`in_use()`); one testbed-wide capture filter |
+| `scripts/e2e_check.py` | Checks that every packet travels only between the hosts the session involves; manifest device fields name real hosts (e.g. `alice-workstation@127.77.3.11`) |
+| `tests/test_addresses.py` | New: 9 tests for the plan, including a guard that fails if any address is hard-coded outside `addresses.py` |
+
+**Result (real end-to-end run):**
+
+| Session | Host pairs in the capture |
+|---|---|
+| `MCP-S-B0001` | `127.77.3.11 ↔ 127.77.1.10` (alice ↔ MCP server) — nothing else |
+| `A2A-S-B0001` | `127.77.3.11 ↔ 127.77.2.10` (alice ↔ assistant) and `127.77.2.10 ↔ 127.77.1.10` (assistant ↔ MCP server); the requester never talks to MCP directly |
+
+**Finding:** the new guard test immediately found leftover hard-coded addresses in the end-to-end check and a docstring, and showed that its own exception for Ollama's `127.0.0.1` was too broad (one mention of "Ollama" anywhere in a file excused every `127.0.0.1` in it); the exception is now per line.
+
+**Test results:** 278 tests pass, three consecutive runs.
+
+**Mutation tests (6 of 6 caught):** MCP client ignores its workstation address · assistant's MCP leg not bound to its host · host check removed from the end-to-end verification · attacker range overlapping the users' range · unknown identity silently given an address · capture network widened to include `127.0.0.1`.
+
+**Security review**
+
+| Risk | Finding | Action |
+|---|---|---|
+| Testbed traffic reaching the real network | — | Every address is loopback inside `127.77.0.0/16` (tested); no firewall or adapter changes |
+| Capturing other programs' traffic (privacy, noise) | Ollama and other tools use `127.0.0.1` | The capture filter excludes it (tested in the first experiment and by the plan tests) |
+| Configuration drift (an address typed twice and changed once) | — | One plan file; a test fails on any hard-coded testbed address elsewhere |
+| Label leakage through addresses (D15) | Attacker hosts will have their own range; hardware uses other addresses | Rule recorded for Part 6: no raw IPs or ports as features |
+| Administrator rights | — | None required |
+
+**Viva notes**
+- *How do you simulate several machines on one computer?* The loopback network is the whole `127.0.0.0/8` range, not just `127.0.0.1`. Each role gets its own loopback address, and clients choose their source address, so captures show traffic between distinct hosts.
+- *Why not Docker or virtual machines?* Loopback addresses give separate hosts with no extra software, no administrator rights and no risk of reaching the real network; captures stay on the Npcap loopback adapter the pipeline already uses.
+- *Why a separate block (127.77.x.x) instead of 127.0.0.x?* Other local programs use `127.0.0.1`. A dedicated block lets one capture filter (`net 127.77.0.0/16`) take all testbed traffic and nothing else.
+- *Why will attackers have their own addresses?* On real networks an attacker's server is a different machine; "data sent to an unusual destination" is one of the taxonomy's indicators for exfiltration (AT-05).
+- *Then why must IP addresses not be features?* The model would memorise "addresses 127.77.9.x = attack" — true only in this testbed — and the hardware network uses different addresses altogether. Features must describe behaviour (e.g. a never-seen destination), not specific addresses (D15).

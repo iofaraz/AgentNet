@@ -278,7 +278,7 @@ def _ollama_ready():
 
 
 needs_ollama = pytest.mark.skipif(
-    not _ollama_ready() or testbed.port_in_use(testbed.MCP_SERVER.port),
+    not _ollama_ready() or testbed.MCP_SERVER.in_use(),
     reason="Ollama/model unavailable or port 8000 in use",
 )
 

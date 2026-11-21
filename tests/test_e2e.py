@@ -31,7 +31,7 @@ def _available():
         asyncio.run(agent.model_digest(agent.DEFAULT_MODEL))
     except Exception:
         return False
-    return not (testbed.port_in_use(testbed.MCP_SERVER.port) or testbed.port_in_use(testbed.A2A_SERVER.port))
+    return not (testbed.MCP_SERVER.in_use() or testbed.A2A_SERVER.in_use())
 
 
 pytestmark = pytest.mark.skipif(not _available(),
@@ -99,7 +99,7 @@ def test_audit_entries_match_the_session_window(e2e):
     outside = [x for x in entries if x not in window]
     assert {x["principal"] for x in outside} == {"ops-agent"}, \
         "every other MCP call belongs to the A2A session's assistant"
-    assert not testbed.port_in_use(testbed.MCP_SERVER.port), "servers must be stopped afterwards"
+    assert not testbed.MCP_SERVER.in_use(), "servers must be stopped afterwards"
     assert not capture._running
 
 
@@ -117,6 +117,22 @@ def test_verify_detects_unexpected_a2a_methods(e2e, monkeypatch):
     monkeypatch.setattr(e, "A2A_EXPECTED_METHODS", {"SendMessage": 9})
     problems = _reverify(e2e.out_dir, e2e.results).problems
     assert any("A2A-S-B0001" in p and "JSON-RPC methods" in p for p in problems), problems
+
+
+def test_captures_follow_the_address_plan(e2e):
+    A = testbed.addresses
+    mcp = e.address_pairs(e2e.out_dir / "pcaps" / e2e.results[0].capture_file)
+    a2a = e.address_pairs(e2e.out_dir / "pcaps" / e2e.results[1].capture_file)
+    alice = A.workstation("alice")
+    assert mcp == {(alice, A.MCP_HOST), (A.MCP_HOST, alice)}
+    assert (alice, A.A2A_HOST) in a2a and (A.A2A_HOST, A.MCP_HOST) in a2a
+    assert (alice, A.MCP_HOST) not in a2a, "in an A2A session the requester never talks to MCP directly"
+
+
+def test_verify_detects_unexpected_hosts(e2e, monkeypatch):
+    monkeypatch.setattr(e, "E2E_REQUESTER", "bob")   # pretend the sessions came from bob's workstation
+    problems = _reverify(e2e.out_dir, e2e.results).problems
+    assert sum("address plan" in p for p in problems) == 2, problems
 
 
 def test_verify_detects_tampering(e2e, tmp_path):

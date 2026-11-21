@@ -268,7 +268,7 @@ class Harness:
         async def connect(principal):
             self.connected_as.append(principal)
             if connect_fails:
-                raise ConnectionError("mcp server at 127.0.0.1:8000 refused (internal detail)")
+                raise ConnectionError("mcp server refused the connection (internal detail)")
             yield self.mcp
 
         executor = EXEC.LabAssistantExecutor(self.world, self.audit, connect, llm_factory=lambda: self.llm)
@@ -286,8 +286,8 @@ class Harness:
 
         async def go():
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), headers=headers,
-                                         base_url="http://127.0.0.1:9999") as http:
-                client = await create_client(agent="http://127.0.0.1:9999",
+                                         base_url=testbed.addresses.A2A_URL) as http:
+                client = await create_client(agent=testbed.addresses.A2A_URL,
                                              client_config=ClientConfig(streaming=False, httpx_client=http))
                 try:
                     async for chunk in client.send_message(
@@ -308,7 +308,7 @@ def test_agent_card_declares_auth_and_skills():
     assert {s.id for s in card.skills} == {"lab-information", "device-control"}
     assert card.security_schemes["bearer"].http_auth_security_scheme.scheme == "Bearer"
     assert "bearer" in card.security_requirements[0].schemes
-    assert card.supported_interfaces[0].url == "http://127.0.0.1:9999/"
+    assert card.supported_interfaces[0].url == testbed.addresses.A2A_URL + "/"
 
 
 def test_request_is_answered_with_mcp_tools(tmp_path):

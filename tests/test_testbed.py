@@ -20,7 +20,7 @@ def free_port():
 def spec_for(tmp_path, body, port=None, ready_url=None, name="fake"):
     port = port or free_port()
     (tmp_path / "srv.py").write_text(body.format(port=port), encoding="utf-8")
-    return t.ServerSpec(name, tmp_path, "srv.py", port, ready_url)
+    return t.ServerSpec(name, tmp_path, "srv.py", port, ready_url, host="127.0.0.1")
 
 
 HTTP_SERVER = (
@@ -30,16 +30,22 @@ HTTP_SERVER = (
 )
 
 
-def test_specs_match_the_server_scripts():
+def test_specs_match_the_address_plan_and_server_scripts():
     import re
+    A = t.addresses
+    expected = {"mcp-server": ("MCP_HOST", "MCP_PORT"), "a2a-server": ("A2A_HOST", "A2A_PORT")}
     for spec in (t.MCP_SERVER, t.A2A_SERVER):
+        host_name, port_name = expected[spec.name]
+        assert (spec.host, spec.port) == (getattr(A, host_name), getattr(A, port_name))
         source = (spec.directory / spec.script).read_text(encoding="utf-8")
-        assert re.search(rf"(port=|PORT = ){spec.port}\b", source), f"{spec.name}: port differs from {spec.script}"
-        hosts = re.findall(r'(?:host=|HOST = )"([^"]+)"', source)
-        assert hosts and set(hosts) == {"127.0.0.1"}, f"{spec.name} must bind to 127.0.0.1 only, found {hosts}"
-    assert t.MCP_SERVER.bpf == "tcp port 8000" and t.A2A_SERVER.bpf == "tcp port 9999"
+        # The server binds exactly the planned address, taken from addresses.py.
+        assert f"HOST = addresses.{host_name}" in source and f"PORT = addresses.{port_name}" in source
+        assert re.search(r"host=HOST\b", source) and re.search(r"port=PORT\b", source)
+        literals = re.findall(r"\b127\.\d+\.\d+\.\d+\b", source)
+        assert not literals, f"{spec.script} hard-codes addresses {literals}; use addresses.py"
+    assert t.MCP_SERVER.bpf == t.A2A_SERVER.bpf == t.A2A_SESSION_BPF == "net 127.77.0.0/16"
     assert t.MCP_SERVER.audit and t.A2A_SERVER.audit
-    assert t.A2A_SESSION_BPF == "tcp port 9999 or tcp port 8000"
+    assert t.A2A_SERVER.ready_url == "http://127.77.2.10:9999/.well-known/agent-card.json"
 
 
 def test_start_ready_stop(tmp_path):
@@ -47,14 +53,14 @@ def test_start_ready_stop(tmp_path):
     server = t.Server(spec, tmp_path / "logs" / "fake.log")
     server.start()
     try:
-        assert server.running and t.port_in_use(spec.port)
+        assert server.running and spec.in_use()
     finally:
         server.stop()
     assert not server.running
     deadline = time.monotonic() + 5
-    while t.port_in_use(spec.port) and time.monotonic() < deadline:
+    while spec.in_use() and time.monotonic() < deadline:
         time.sleep(0.1)
-    assert not t.port_in_use(spec.port), "port must be released after stop"
+    assert not spec.in_use(), "port must be released after stop"
     assert "starting" in (tmp_path / "logs" / "fake.log").read_text(encoding="utf-8")
 
 
@@ -97,7 +103,7 @@ def test_logs_are_never_overwritten(tmp_path):
     with pytest.raises(t.TestbedError, match="never overwritten"):
         t.Server(spec, tmp_path / "taken.log").start()
     assert (tmp_path / "taken.log").read_text(encoding="utf-8") == "earlier run"
-    assert not t.port_in_use(spec.port)
+    assert not spec.in_use()
 
 
 def test_running_stops_servers_even_on_error(tmp_path):
@@ -119,6 +125,6 @@ def test_running_stops_earlier_servers_if_a_later_one_fails(tmp_path):
         with t.running(good, bad, log_dir=tmp_path / "logs", run_id="R"):
             pass
     deadline = time.monotonic() + 5
-    while t.port_in_use(good.port) and time.monotonic() < deadline:
+    while good.in_use() and time.monotonic() < deadline:
         time.sleep(0.1)
-    assert not t.port_in_use(good.port), "the first server must be stopped"
+    assert not good.in_use(), "the first server must be stopped"

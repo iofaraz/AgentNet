@@ -21,9 +21,11 @@ from a2a.helpers import new_text_message
 from a2a.types import Role, SendMessageRequest
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "mcp"))
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+import addresses  # noqa: E402
 from workspace import DEFAULT_SEED, World  # noqa: E402
 
-AGENT_URL = "http://127.0.0.1:9999"
+AGENT_URL = addresses.A2A_URL
 HTTP_TIMEOUT = 300.0   # the assistant runs a model and MCP calls per request
 
 MESSAGES = [
@@ -53,7 +55,9 @@ async def send_messages(messages=MESSAGES, agent_url=AGENT_URL, principal="alice
     """
     headers = {"Authorization": f"Bearer {token_for(principal)}"} if principal else {}
     replies = []
-    async with httpx.AsyncClient(headers=headers, timeout=HTTP_TIMEOUT) as http:
+    # Requests leave from the requester's workstation address (addresses.py).
+    transport = httpx.AsyncHTTPTransport(local_address=addresses.workstation(principal))
+    async with httpx.AsyncClient(headers=headers, timeout=HTTP_TIMEOUT, transport=transport) as http:
         client = await create_client(agent=agent_url, client_config=ClientConfig(streaming=False, httpx_client=http))
         try:
             for index, text in enumerate(messages, start=1):

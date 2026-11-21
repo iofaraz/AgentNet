@@ -12,6 +12,8 @@ The client authenticates as a synthetic user with an
 
 import asyncio
 import os
+import sys
+from pathlib import Path
 
 import httpx2
 from mcp import Client
@@ -19,7 +21,10 @@ from mcp.client.streamable_http import streamable_http_client
 
 from workspace import DEFAULT_SEED, World
 
-SERVER_URL = "http://127.0.0.1:8000/mcp"
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+import addresses  # noqa: E402
+
+SERVER_URL = addresses.MCP_URL
 HTTP_TIMEOUT = 30.0
 
 
@@ -32,10 +37,12 @@ def token_for(principal: str) -> str:
 def connect(principal: str | None, server_url: str = SERVER_URL):
     """An HTTP client carrying the user's token, for use with mcp.Client.
 
+    Requests leave from the user's workstation address (addresses.py).
     principal=None connects anonymously (no Authorization header).
     """
     headers = {"Authorization": f"Bearer {token_for(principal)}"} if principal else {}
-    return httpx2.AsyncClient(headers=headers, timeout=HTTP_TIMEOUT)
+    transport = httpx2.AsyncHTTPTransport(local_address=addresses.workstation(principal))
+    return httpx2.AsyncClient(headers=headers, timeout=HTTP_TIMEOUT, transport=transport)
 
 
 def _text(result) -> str:

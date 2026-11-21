@@ -94,10 +94,12 @@ def mcp_basic_tools() -> runner.Scenario:
     return runner.Scenario(
         name="mcp-basic-tools", protocol="MCP", attack_id=manifest.BENIGN_ID,
         bpf=spec.bpf, run=run, timeout=60,
-        source_device="mcp-client@127.0.0.1",
-        destination_device=f"{spec.name}@127.0.0.1:{spec.port}",
+        source_device=f"alice-workstation@{testbed.addresses.workstation('alice')}",
+        destination_device=f"{spec.name}@{spec.host}:{spec.port}",
     )
 
+
+E2E_REQUESTER = "alice"   # both scenarios run as alice
 
 A2A_REQUESTS = [
     "What is the weather in Islamabad?",
@@ -120,8 +122,8 @@ def a2a_lab_assistant() -> runner.Scenario:
     return runner.Scenario(
         name="a2a-lab-assistant", protocol="A2A", attack_id=manifest.BENIGN_ID,
         bpf=testbed.A2A_SESSION_BPF, run=run, timeout=600,
-        source_device="a2a-client@127.0.0.1",
-        destination_device=f"{spec.name}@127.0.0.1:{spec.port}",
+        source_device=f"alice-workstation@{testbed.addresses.workstation('alice')}",
+        destination_device=f"{spec.name}@{spec.host}:{spec.port}",
     )
 
 
@@ -180,6 +182,30 @@ def jsonrpc_methods(requests) -> list[str]:
     return [body["method"] for _, _, body in requests if isinstance(body, dict) and "method" in body]
 
 
+def address_pairs(pcap: Path) -> set[tuple[str, str]]:
+    """(source, destination) IP pairs of every packet in a capture."""
+    out = subprocess.run([str(find_tshark()), "-r", str(pcap), "-T", "fields", "-E", "separator=\t",
+                          "-e", "ip.src", "-e", "ip.dst"], capture_output=True, text=True, timeout=120)
+    if out.returncode != 0:
+        raise capture.CaptureError(f"tshark failed on {pcap.name}: {out.stderr.strip()}")
+    return {tuple(line.split("\t")) for line in out.stdout.splitlines() if line.strip()}
+
+
+def _both_ways(a: str, b: str) -> set[tuple[str, str]]:
+    return {(a, b), (b, a)}
+
+
+def expected_pairs(protocol: str, requester: str) -> set[tuple[str, str]]:
+    """Which hosts may talk to each other in a benign session (addresses.py)."""
+    A = testbed.addresses
+    ws = A.workstation(requester)
+    if protocol == "MCP":
+        return _both_ways(ws, A.MCP_HOST)
+    if protocol == "A2A":
+        return _both_ways(ws, A.A2A_HOST) | _both_ways(A.A2A_HOST, A.MCP_HOST)
+    return set()
+
+
 # --------------------------------------------------------------------------
 # The check
 # --------------------------------------------------------------------------
@@ -234,6 +260,12 @@ def _check_contents(report: E2EReport, sid: str, pcap: Path, entry: dict, protoc
     frames = frame_count(pcap)
     if str(frames) != entry["packets_captured"]:
         problem(f"{sid}: tshark sees {frames} packets, capture log says {entry['packets_captured']}")
+
+    # Every packet must travel between exactly the hosts this session involves.
+    pairs = address_pairs(pcap)
+    expected = expected_pairs(protocol, E2E_REQUESTER)
+    if pairs != expected:
+        problem(f"{sid}: hosts {sorted(pairs)} differ from the address plan {sorted(expected)}")
 
     if protocol == "MCP":
         requests = http_requests(pcap, testbed.MCP_SERVER.port)

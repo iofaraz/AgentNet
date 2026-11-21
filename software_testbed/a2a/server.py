@@ -1,4 +1,4 @@
-"""AgentNet Lab Assistant — A2A server (JSON-RPC over HTTP on 127.0.0.1:9999).
+"""AgentNet Lab Assistant — A2A server (JSON-RPC over HTTP; address from software_testbed/addresses.py).
 
 An LLM-driven agent that answers lab requests using the MCP server's tools
 (see agent_executor.py). The Agent Card declares bearer-token
@@ -40,10 +40,16 @@ from agent_executor import LabAssistantExecutor
 from audit import AuditLog
 from workspace import DEFAULT_SEED, World
 
-HOST = "127.0.0.1"
-PORT = 9999
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+import addresses  # noqa: E402
+
+HOST = addresses.A2A_HOST
+PORT = addresses.A2A_PORT
 VERSION = "2.0.0"
-MCP_URL = "http://127.0.0.1:8000/mcp"
+MCP_URL = addresses.MCP_URL
 MCP_TIMEOUT = 30.0
 
 
@@ -90,7 +96,10 @@ def mcp_connector(world: World, url: str = MCP_URL):
     @contextlib.asynccontextmanager
     async def connect(principal: str):
         token = world.token_for(principal)
-        async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=MCP_TIMEOUT) as http:
+        # MCP calls leave from the assistant's own host address.
+        transport = httpx2.AsyncHTTPTransport(local_address=addresses.workstation(principal))
+        async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=MCP_TIMEOUT,
+                                      transport=transport) as http:
             async with Client(streamable_http_client(url, http_client=http)) as session:
                 yield session
 

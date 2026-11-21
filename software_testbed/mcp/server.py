@@ -1,4 +1,4 @@
-"""AgentNet MCP server (Streamable HTTP on 127.0.0.1:8000).
+"""AgentNet MCP server (Streamable HTTP; address from software_testbed/addresses.py).
 
 Exposes a synthetic lab workspace — files, notes, sensors and actuators —
 backed by workspace.World, with role-based access control and an audit log
@@ -22,6 +22,8 @@ Run by hand:
 import functools
 import inspect
 import os
+import sys
+from pathlib import Path
 from typing import Any, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -31,8 +33,11 @@ from mcp.types import ToolAnnotations
 from audit import ALLOWED, DENIED, ERROR, INVALID, AuditLog
 from workspace import DEFAULT_SEED, AccessDenied, InvalidRequest, World
 
-HOST = "127.0.0.1"
-PORT = 8000
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+import addresses  # noqa: E402
+
+HOST = addresses.MCP_HOST
+PORT = addresses.MCP_PORT
 VERSION = "1.1.0"
 
 # Tool descriptions are kept in one table: they are what an agent reads when

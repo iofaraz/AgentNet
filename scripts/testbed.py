@@ -10,7 +10,8 @@ so their start-up traffic never appears in a session's capture.
 Safety:
 * refuses to start if the port is already in use, so a session can never be
   recorded against some other program listening on the same port;
-* binds to 127.0.0.1 only (set in the server scripts);
+* binds to loopback addresses only, each server on its own address in the
+  testbed network defined in software_testbed/addresses.py;
 * each server's output goes to a log file, kept as raw experiment data (the
   taxonomy validates attack outcomes against application logs);
 * servers are always stopped, even if the run fails.
@@ -32,7 +33,14 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTBED = REPO_ROOT / "software_testbed"
-HOST = "127.0.0.1"
+if str(TESTBED) not in sys.path:
+    sys.path.append(str(TESTBED))
+import addresses  # noqa: E402
+
+# One capture filter for every session: all traffic between testbed hosts
+# (any port, including attacker services) and nothing from the address where
+# Ollama, editors and Docker run.
+TESTBED_BPF = addresses.CAPTURE_FILTER
 
 START_TIMEOUT = 60.0
 STOP_TIMEOUT = 15.0
@@ -49,27 +57,33 @@ class ServerSpec:
     script: str            # file to run with the project's Python
     port: int
     ready_url: str | None  # HTTP URL that must answer 200 before the server counts as ready
+    host: str              # address the server binds (from addresses.py)
     audit: bool = False    # server writes an audit log (path passed in AGENTNET_AUDIT_LOG)
 
     @property
     def bpf(self) -> str:
-        """Capture filter for this server's traffic."""
-        return f"tcp port {self.port}"
+        """Capture filter for sessions with this server (all testbed traffic)."""
+        return TESTBED_BPF
+
+    def in_use(self) -> bool:
+        """True if something already listens on this server's address and port."""
+        return port_in_use(self.port, self.host)
 
 
-MCP_SERVER = ServerSpec("mcp-server", TESTBED / "mcp", "server.py", 8000, None, audit=True)
+MCP_SERVER = ServerSpec("mcp-server", TESTBED / "mcp", "server.py", addresses.MCP_PORT, None,
+                        audit=True, host=addresses.MCP_HOST)
 A2A_SERVER = ServerSpec(
-    "a2a-server", TESTBED / "a2a", "server.py", 9999,
-    f"http://{HOST}:9999/.well-known/agent-card.json", audit=True,
+    "a2a-server", TESTBED / "a2a", "server.py", addresses.A2A_PORT,
+    f"{addresses.A2A_URL}/.well-known/agent-card.json", audit=True, host=addresses.A2A_HOST,
 )
 
 # An A2A session also carries the MCP traffic the assistant generates on the
 # requester's behalf: both legs are visible on the network, and attacks such
 # as confused deputy or exfiltration are only recognisable across them.
-A2A_SESSION_BPF = f"tcp port {A2A_SERVER.port} or tcp port {MCP_SERVER.port}"
+A2A_SESSION_BPF = TESTBED_BPF
 
 
-def port_in_use(port: int, host: str = HOST) -> bool:
+def port_in_use(port: int, host: str) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
         return s.connect_ex((host, port)) == 0
@@ -90,7 +104,7 @@ class Server:
         spec = self.spec
         if self._proc is not None:
             raise TestbedError(f"{spec.name} already started")
-        if port_in_use(spec.port):
+        if spec.in_use():
             raise TestbedError(
                 f"port {spec.port} is already in use; stop whatever is listening there "
                 f"before starting {spec.name}"
@@ -128,7 +142,7 @@ class Server:
         while time.monotonic() < deadline:
             if self._proc.poll() is not None:
                 raise TestbedError(f"{spec.name} exited during start-up; see {self.log_path}")
-            if port_in_use(spec.port):
+            if spec.in_use():
                 if spec.ready_url is None:
                     return
                 try:

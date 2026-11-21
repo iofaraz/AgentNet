@@ -381,7 +381,7 @@ def test_audit_between_selects_a_window(tmp_path):
 # MCP over real HTTP: tokens -> roles, audit log written by the server
 # ======================================================================
 
-needs_port = pytest.mark.skipif(testbed.port_in_use(testbed.MCP_SERVER.port), reason="port 8000 in use")
+needs_port = pytest.mark.skipif(testbed.MCP_SERVER.in_use(), reason="MCP server address already in use")
 
 
 @needs_port
