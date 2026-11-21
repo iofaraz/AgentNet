@@ -35,13 +35,13 @@ Every captured session must have a corresponding record in the common manifest.
 
 | Field | Description | Example |
 |---|---|---|
-| session_id | Unique session identifier | MCP-S001 |
+| session_id | Unique session identifier | MCP-S-AT01-0001 |
 | label | Benign or Attack | Attack |
 | attack_id | Attack category or N/A | AT-01 |
 | protocol | MCP or A2A | MCP |
 | transport | Communication transport | HTTP |
 | environment | Software or Hardware | Software |
-| capture_file | Associated PCAP filename | mcp_at01_001.pcapng |
+| capture_file | Associated PCAP filename | mcp_at01_software_001.pcapng |
 | outcome | Success or Failed | Success |
 | start_time | Session start timestamp | 2026-11-20T10:30:00 |
 | end_time | Session end timestamp | 2026-11-20T10:30:15 |
@@ -62,12 +62,16 @@ Use ISO 8601 timestamps and keep the same timezone convention throughout the pro
 
 Use unique IDs following these formats:
 
-- MCP benign: `MCP-B001`
-- A2A benign: `A2A-B001`
-- MCP attack: `MCP-AT01-001`
-- A2A attack: `A2A-AT06-001`
+`<PROTOCOL>-<ENV>-B<number>` for benign sessions and `<PROTOCOL>-<ENV>-AT<nn>-<number>` for attack sessions, where `<ENV>` is `S` (Software) or `H` (Hardware) and `<number>` has at least 4 digits.
 
-For hardware sessions, keep the same pattern but distinguish the environment in the manifest.
+| Session | Software | Hardware |
+|---|---|---|
+| MCP benign | `MCP-S-B0001` | `MCP-H-B0001` |
+| A2A benign | `A2A-S-B0001` | `A2A-H-B0001` |
+| MCP attack | `MCP-S-AT01-0001` | `MCP-H-AT01-0001` |
+| A2A attack | `A2A-S-AT06-0001` | `A2A-H-AT06-0001` |
+
+The environment letter keeps software and hardware IDs distinct when the two datasets are merged, and must match the `environment` column. Four digits allow up to 9,999 sessions per protocol, environment and attack category.
 
 **Session IDs must never be reused.**
 
@@ -279,6 +283,11 @@ The dataset pipeline must demonstrate that it can read an existing capture, extr
 
 ---
 
-**Contract Status:** Initial Version 1.0
+**Contract Status:** Version 1.1 (proposed — awaiting agreement from both team members)
+
+| Version | Change |
+|---|---|
+| 1.0 | Initial version |
+| 1.1 | Session IDs include an environment letter (`S`/`H`) and at least 4 digits, so software and hardware IDs cannot clash when merged (§4). §3 examples corrected to follow §4 and §5. |
 
 Any changes to field names, labels, IDs, or output formats must be discussed and agreed upon by both team members before implementation.

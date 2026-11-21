@@ -12,7 +12,7 @@ PKT = timezone(timedelta(hours=5))
 
 def benign(**overrides):
     rec = {
-        "session_id": "MCP-B001",
+        "session_id": "MCP-S-B0001",
         "label": "Benign",
         "attack_id": "AT-00",
         "protocol": "MCP",
@@ -30,7 +30,7 @@ def benign(**overrides):
 
 def attack(**overrides):
     rec = benign(
-        session_id="MCP-AT01-001",
+        session_id="MCP-S-AT01-0001",
         label="Attack",
         attack_id="AT-01",
         capture_file="mcp_at01_software_001.pcapng",
@@ -63,20 +63,34 @@ def test_failed_attack_is_valid():
 
 def test_a2a_attack_on_allowed_protocol():
     assert errors(attack(
-        session_id="A2A-AT06-001", attack_id="AT-06", protocol="A2A",
+        session_id="A2A-S-AT06-0001", attack_id="AT-06", protocol="A2A",
         capture_file="a2a_at06_software_001.pcapng",
     )) == []
 
 
 def test_hardware_and_https_are_valid():
     assert errors(benign(
-        environment="Hardware", transport="HTTPS",
+        session_id="MCP-H-B0001", environment="Hardware", transport="HTTPS",
         capture_file="mcp_benign_hardware_001.pcapng",
     )) == []
 
 
-def test_four_digit_numbers_allowed():
-    assert errors(benign(session_id="MCP-B2500", capture_file="mcp_benign_software_2500.pcapng")) == []
+def test_hardware_attack_is_valid():
+    assert errors(attack(
+        session_id="MCP-H-AT07-0001", attack_id="AT-07", environment="Hardware",
+        capture_file="mcp_at07_hardware_001.pcapng",
+    )) == []
+
+
+def test_large_numbers_allowed():
+    assert errors(benign(session_id="MCP-S-B12500", capture_file="mcp_benign_software_12500.pcapng")) == []
+
+
+def test_software_and_hardware_ids_never_clash():
+    sw = _full(benign())
+    hw = _full(benign(session_id="MCP-H-B0001", environment="Hardware",
+                      capture_file="mcp_benign_hardware_001.pcapng"))
+    assert m.check_records([sw, hw]).ok
 
 
 # ---- consistency between fields ------------------------------------------
@@ -87,10 +101,10 @@ def test_four_digit_numbers_allowed():
     (benign(attack_variant="V1"), "benign sessions have attack_variant"),
     (attack(label="Benign"), "is an attack but label"),
     (attack(outcome="N/A"), "attack outcome must be one of"),
-    (attack(protocol="A2A", session_id="A2A-AT01-001",
+    (attack(protocol="A2A", session_id="A2A-S-AT01-0001",
             capture_file="a2a_at01_software_001.pcapng"), "AT-01 is not defined for A2A"),
-    (attack(session_id="MCP-AT02-001"), "implies AT-02"),
-    (benign(session_id="A2A-B001"), "says A2A but protocol"),
+    (attack(session_id="MCP-S-AT02-0001"), "implies AT-02"),
+    (benign(session_id="A2A-S-B0001"), "says A2A but protocol"),
     (benign(capture_file="mcp_at01_software_001.pcapng"), "implies AT-01"),
     (benign(capture_file="a2a_benign_software_001.pcapng"), "says a2a"),
     (benign(capture_file="mcp_benign_hardware_001.pcapng"), "says hardware"),
@@ -104,8 +118,15 @@ def test_inconsistent_fields_rejected(rec, fragment):
 
 @pytest.mark.parametrize("rec, fragment", [
     (benign(session_id="MCP-1"), "does not match the contract format"),
-    (benign(session_id="MCP-B01"), "does not match the contract format"),
-    (attack(session_id="MCP-AT08-001", attack_id="AT-08"), "attack_id must be one of"),
+    (benign(session_id="MCP-S-B001"), "does not match the contract format"),
+    (benign(session_id="MCP-B0001"), "does not match the contract format"),
+    (benign(session_id="MCP-B001"), "does not match the contract format"),
+    (benign(session_id="MCP-X-B0001"), "does not match the contract format"),
+    (benign(session_id="mcp-s-b0001"), "does not match the contract format"),
+    (benign(session_id="MCP-H-B0001"), "says Hardware but environment"),
+    (benign(session_id="MCP-S-B0001", environment="Hardware",
+            capture_file="mcp_benign_hardware_001.pcapng"), "says Software but environment"),
+    (attack(session_id="MCP-S-AT08-0001", attack_id="AT-08"), "attack_id must be one of"),
     (benign(protocol="HTTP"), "protocol must be one of"),
     (benign(transport="TLS"), "transport must be one of"),
     (benign(environment="Cloud"), "environment must be one of"),
@@ -153,21 +174,21 @@ def test_duplicate_session_id_rejected():
 
 def test_overlap_in_shared_capture_rejected():
     a = benign()
-    b = benign(session_id="MCP-B002", start_time="2026-11-21T10:30:10.000+05:00",
+    b = benign(session_id="MCP-S-B0002", start_time="2026-11-21T10:30:10.000+05:00",
                end_time="2026-11-21T10:30:20.000+05:00")
     assert any("overlap" in e for e in m.check_records([_full(a), _full(b)]).errors)
 
 
 def test_back_to_back_sessions_in_shared_capture_allowed():
     a = benign()
-    b = benign(session_id="MCP-B002", start_time="2026-11-21T10:30:15.000+05:00",
+    b = benign(session_id="MCP-S-B0002", start_time="2026-11-21T10:30:15.000+05:00",
                end_time="2026-11-21T10:30:20.000+05:00")
     assert m.check_records([_full(a), _full(b)]).ok
 
 
 def test_mixed_timezone_conventions_rejected():
     a = benign()
-    b = benign(session_id="MCP-B002", capture_file="mcp_benign_software_002.pcapng",
+    b = benign(session_id="MCP-S-B0002", capture_file="mcp_benign_software_002.pcapng",
                start_time="2026-11-21T11:00:00", end_time="2026-11-21T11:00:05")
     assert any("one convention" in e for e in m.check_records([_full(a), _full(b)]).errors)
 
@@ -187,7 +208,7 @@ def test_append_and_load_round_trip(tmp_path):
     m.append(p, attack())
     records, report = m.load(p)
     assert report.ok, report.errors
-    assert [r["session_id"] for r in records] == ["MCP-B001", "MCP-AT01-001"]
+    assert [r["session_id"] for r in records] == ["MCP-S-B0001", "MCP-S-AT01-0001"]
     assert records[1]["outcome"] == "Success"
 
 
@@ -196,7 +217,7 @@ def test_append_rejects_invalid_and_writes_nothing(tmp_path):
     m.append(p, benign())
     before = p.read_bytes()
     with pytest.raises(m.ManifestError):
-        m.append(p, benign(session_id="MCP-B002", outcome="Success"))
+        m.append(p, benign(session_id="MCP-S-B0002", outcome="Success"))
     with pytest.raises(m.ManifestError, match="already used"):
         m.append(p, benign(capture_file="mcp_benign_software_002.pcapng"))
     assert p.read_bytes() == before
@@ -229,7 +250,7 @@ def test_load_rejects_ragged_rows(tmp_path):
     with open(p, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(m.COLUMNS)
-        w.writerow(["MCP-B001", "Benign"])
+        w.writerow(["MCP-S-B0001", "Benign"])
     _, report = m.load(p)
     assert any("fewer values" in e for e in report.errors)
 

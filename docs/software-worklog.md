@@ -7,7 +7,7 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 | **Owner** | Umar Hayat Ali (software side) |
 | **Branch** | `software-dataset` (merged into `main` by pull request) |
 | **Rules followed** | One subpart at a time · no repository structure changes · no changes to `main` · high-risk steps confirmed first · push after every subpart · security review after every subpart |
-| **Binding standard** | [`attack-dataset-contract.md`](attack-dataset-contract.md) v1.0 |
+| **Binding standard** | [`attack-dataset-contract.md`](attack-dataset-contract.md) v1.1 (proposed; v1.0 plus the session ID change in 1.1b) |
 
 ---
 
@@ -17,6 +17,7 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 |---|---|---|---|
 | **0. Setup** | 0.1 Tools, libraries and environment | — | ✅ Done |
 | **1. Foundation** | 1.1 Manifest schema and validator | 5–7 | ✅ Done |
+| | 1.1b Session ID format with environment letter | 5–7 | ✅ Done |
 | | 1.2 Automated TShark capture | 5–7 | ⏳ Next |
 | | 1.3 Session runner (capture → run → stop → log) | 5–7 | Pending |
 | | 1.4 End-to-end test with the existing agents | 5–7 | Pending |
@@ -46,7 +47,7 @@ Items that need a decision from both team members, or that affect the hardware s
 
 | # | Issue | Current handling | Needs |
 |---|---|---|---|
-| D1 | **Session ID clash.** Contract §4 gives hardware sessions the same ID pattern as software (`MCP-B001`), but also says IDs must never be reused. Combined datasets would clash. 3 digits also only reach 999, while ~2,500 benign sessions are planned. | Validator accepts 3+ digits. The ID rule is a single pattern (`SESSION_ID_PATTERN` in `scripts/manifest.py`). No IDs have been issued yet. | Agreement with hardware side. Options: number ranges (software 0001–4999, hardware 5000+), or an environment letter (`MCP-S-B0001`). |
+| D1 | **Session ID clash.** Contract §4 gave hardware sessions the same ID pattern as software (`MCP-B001`), but also says IDs must never be reused. Combined datasets would clash. 3 digits also only reach 999, while ~2,500 benign sessions are planned. | **Resolved in 1.1b:** environment letter + 4 digits (`MCP-S-B0001` / `MCP-H-B0001`). Contract updated to v1.1 (proposed); validator enforces it. | Hardware side to confirm v1.1 (in the pull request) and use the `H` format. |
 | D2 | **Benign `attack_id`.** Contract §2 says `AT-00`; the contract's column table says `N/A`. | Software writes `AT-00`. Validator accepts `N/A` for benign rows with a warning. | Confirm `AT-00` with hardware side. |
 | D3 | **Outcome spelling.** Contract says `Failed`; attack-taxonomy.md says `Failure`. | Software writes `Failed`. Validator accepts `Failure` with a warning. | Confirm `Failed`. |
 | D4 | **Transport values.** Contract shows only `HTTP`; taxonomy says "HTTP or HTTPS/TLS". | Allowed values: `HTTP`, `HTTPS`. | Confirm. |
@@ -137,3 +138,33 @@ python -m pytest tests/
 - *Why are `session_id`, `outcome`, `environment` never model features?* They are labels or bookkeeping; using them lets the model "cheat" (data leakage, contract §8).
 - *What is CSV injection?* Spreadsheet programs execute cells beginning with `=`; a malicious note could run a formula on the reviewer's machine.
 - *What is mutation testing?* Deliberately breaking the code to prove the tests notice; a test suite that cannot fail proves nothing.
+
+---
+
+### 1.1b — Session ID format with environment letter
+
+**Goal:** resolve open decision D1 so software and hardware session IDs can never clash.
+
+**Decision:** option "environment letter" chosen by the software owner (alternatives considered: number ranges per environment; fixing IDs at merge time — rejected because it breaks the "never reused" rule).
+
+**New format** (contract v1.1, §4)
+
+| Session | Software | Hardware |
+|---|---|---|
+| Benign | `MCP-S-B0001`, `A2A-S-B0001` | `MCP-H-B0001`, `A2A-H-B0001` |
+| Attack | `MCP-S-AT01-0001`, `A2A-S-AT06-0001` | `MCP-H-AT07-0001` |
+
+**What was done**
+1. `scripts/manifest.py`: new `SESSION_ID_PATTERN` (environment letter, 4+ digits) and a new rule — the letter must match the `environment` column (`S` ⇔ Software, `H` ⇔ Hardware).
+2. `tests/test_manifest.py`: all IDs moved to the new format; 8 new tests (hardware IDs valid, software and hardware IDs coexist, old format rejected, unknown letter rejected, lowercase rejected, letter/environment mismatch rejected both ways).
+3. `docs/attack-dataset-contract.md`: §4 rewritten with the new format; §3 example values corrected (`MCP-S001` and `mcp_at01_001.pcapng` did not follow §4/§5); version table added, status "1.1 proposed".
+
+**Test results:** 54 passed. Mutation test: removing the letter/environment check makes 2 tests fail.
+
+**Security review:** no new inputs or file operations. The new pattern is anchored with no nested repetition (no regular-expression denial of service). No other changes.
+
+**Viva notes**
+- *Why put the environment in the ID?* The IDs must be unique across the merged software + hardware dataset. With the letter, uniqueness is guaranteed by construction instead of by coordination.
+- *Why 4 digits?* Roughly 2,500 benign sessions are planned; 3 digits stop at 999.
+- *Why not just rely on the `environment` column?* The contract requires IDs that are never reused. A key that is only unique together with another column is easy to break when files are merged or filtered.
+- *Why does the validator check the letter against the column?* Two places now hold the same fact; if they disagree one of them is wrong, and the validator refuses to guess which.

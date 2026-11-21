@@ -1,7 +1,7 @@
 """AgentNet session manifest.
 
 The manifest is the shared record of every captured session, defined in
-docs/attack-dataset-contract.md (v1.0). This module is the single place that
+docs/attack-dataset-contract.md (v1.1). This module is the single place that
 knows that schema, so the capture tools, the dataset pipeline and the
 hardware team's records are all checked by the same rules.
 
@@ -70,12 +70,13 @@ ATTACK_OUTCOMES = frozenset({"Success", "Failed"})
 LEGACY_BENIGN_ATTACK_ID = NOT_APPLICABLE  # contract column table says "N/A"
 LEGACY_FAILED = "Failure"                 # attack-taxonomy.md says "Failure"
 
-# Contract section 4. "3 or more digits" because ~2,500 benign sessions do not
-# fit in 3. How software and hardware IDs avoid clashing is still to be agreed
-# with the hardware side; whichever rule is chosen changes only this pattern.
+# Contract section 4: <PROTOCOL>-<ENV>-B<number> or <PROTOCOL>-<ENV>-AT<nn>-<number>
+# ENV is S (Software) or H (Hardware) so the two datasets can be merged without
+# ID clashes. Numbers have at least 4 digits (~2,500 benign sessions planned).
 SESSION_ID_PATTERN = re.compile(
-    r"^(?P<proto>MCP|A2A)-(?:B\d{3,}|AT(?P<at>0[1-7])-\d{3,})$"
+    r"^(?P<proto>MCP|A2A)-(?P<env>[SH])-(?:B\d{4,}|AT(?P<at>0[1-7])-\d{4,})$"
 )
+ENV_LETTERS = {"S": "Software", "H": "Hardware"}
 
 # Contract section 5: <protocol>_<attack-id>_<environment>_<run-number>.pcapng
 CAPTURE_FILE_PATTERN = re.compile(
@@ -213,10 +214,13 @@ def check_record(rec: dict[str, str]) -> Report:
     # Session ID format, and agreement with protocol and attack.
     m = SESSION_ID_PATTERN.match(sid)
     if not m:
-        err(f"session_id {sid!r} does not match the contract format (e.g. MCP-B001, MCP-AT01-001)")
+        err(f"session_id {sid!r} does not match the contract format (e.g. MCP-S-B0001, MCP-S-AT01-0001)")
     else:
         if m["proto"] != proto:
             err(f"session_id {sid!r} says {m['proto']} but protocol is {proto!r}")
+        id_env = ENV_LETTERS[m["env"]]
+        if rec["environment"] in ENVIRONMENTS and id_env != rec["environment"]:
+            err(f"session_id {sid!r} says {id_env} but environment is {rec['environment']!r}")
         id_attack = f"AT-{m['at']}" if m["at"] else BENIGN_ID
         if attack_id in ATTACKS and id_attack != attack_id:
             err(f"session_id {sid!r} implies {id_attack} but attack_id is {attack_id!r}")
