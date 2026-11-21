@@ -22,8 +22,8 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 | | 1.3 Session runner (capture → run → stop → log) | 5–7 | ✅ Done |
 | | 1.4 End-to-end test with the existing agents | 5–7 | ✅ Done |
 | **2. Realistic testbed** | 2.1 Richer MCP server (files, synthetic secrets, mock device) | 5 | ✅ Done |
-| | 2.2 LLM-driven MCP agent (Ollama) | 5 | ⏳ Next |
-| | 2.3 LLM-driven A2A agents | 5 | Pending |
+| | 2.2 LLM-driven MCP agent (Ollama) | 5 | ✅ Done |
+| | 2.3 LLM-driven A2A agents | 5 | ⏳ Next |
 | | 2.4 Separate hosts so attacker traffic has its own address | 5 | Pending |
 | **3. Benign traffic** | 3.1 Catalogue of benign scenarios with variability | 5 | Pending |
 | | 3.2 Collection run, validation and backup | 5 | Pending |
@@ -58,6 +58,7 @@ Items that need a decision from both team members, or that affect the hardware s
 | D11 | **Tool names shared with the hardware side.** Software-to-hardware evaluation compares the same behaviour in two environments; if the ESP32 MCP server names or shapes its sensor/actuator tools differently, the two datasets differ for reasons unrelated to the environment. | Software uses `list_devices`, `read_sensor(sensor_id)`, `set_led(device_id, on, color)`, `sound_buzzer(device_id, duration_ms)` with DHT22/BME280 sensor types. | Hardware side to confirm or share its tool names and argument shapes; align before collection (3.2). |
 | D12 | **Label leakage through identities.** Bearer tokens travel in plaintext HTTP and appear in captures. If attack sessions used identities that benign sessions never use (e.g. an "attacker" user), a model could detect attacks from the token alone. | Tokens are opaque (no user names inside) and synthetic. | Rule for Part 4: attack sessions use the same identities as benign sessions (e.g. a compromised `bob`). Rule for Part 6: tokens and identities are not model features. |
 | D10 | **Demo agents produce identical sessions.** In 1.4, every MCP session was 47 packets / 10,304 bytes and every A2A session 100 packets / 17,188 bytes. A dataset of such sessions would let a model memorise sizes instead of learning behaviour. | Evidence recorded; the demo sessions are not added to the dataset manifest. | Variability is the goal of Part 2 and subpart 3.1. |
+| D13 | **Label leakage through the session driver.** LLM-driven sessions have ~1–2 s gaps between MCP calls (model thinking time); scripted sessions have millisecond gaps. If benign sessions were mostly LLM-driven and attacks mostly scripted (or the reverse), timing alone would reveal the label. | Recorded. The session runner already stores the scenario name, and LLM sessions record model and seed in `notes`. | Rule for Parts 3–4: benign and attack sessions use the same mix of LLM-driven and scripted drivers, per protocol. Check the mix in 7.1. |
 | D8 | **Where capture hashes are stored.** The contract's manifest has no hash column, and its schema must not change without agreement. | **Resolved in 1.3:** a separate capture log `dataset/labels/capture_log.csv` (one row per session, valid or excluded) holds hash, packet/drop counts, scenario name, software versions and exclusion reasons. The manifest is unchanged. | Hardware side may use the same log format. |
 
 ---
@@ -455,3 +456,72 @@ Synthetic users: `alice` (viewer), `bob` (operator), `dana` (admin), `reporter-a
 - *How will you prove an attack succeeded?* From the audit log: for example, a `read_file` of `secrets/api_keys.txt` allowed for a principal who should not have obtained it, or a `set_led` by a caller who was not authorised to request it — selected by the session's time window.
 - *Why not put the session ID in a header to make matching easier?* Headers are in the captured traffic; an ID like `MCP-S-AT01-0001` would hand the label to the model (data leakage).
 - *What are MCP tool annotations?* Hints such as "read-only" or "destructive" that tell an agent how risky a tool is. They are metadata the server controls — which is exactly what a malicious server can lie about.
+
+---
+
+### 2.2 — LLM-driven MCP agent (Ollama)
+
+**Goal:** an agent in which a real language model — not a script — decides which MCP tools to call. Tool poisoning (AT-01), prompt injection via tool output (AT-03) and confused deputy (AT-04) attack the model's decisions, so they need one; it also gives benign traffic natural variety in tool choice, arguments and timing.
+
+**Files**
+
+| File | Purpose |
+|---|---|
+| `software_testbed/llm/agent.py` | `OllamaChat` (Ollama `/api/chat` client with tool calling), `run_agent()` (the loop), `AgentResult`/`Step` (trace), `model_digest()`, command-line tool |
+| `software_testbed/mcp/server.py` | Tool descriptions now say where identifiers come from (see evaluation) |
+| `tests/test_llm_agent.py` | 22 tests |
+
+**How the loop works**
+1. List the MCP server's tools and give the model exactly their names, descriptions and input schemas.
+2. Send the system prompt and the task; the model replies with tool calls or a final answer.
+3. Execute each tool call on the MCP server; return the result (truncated to 4,000 characters) to the model as a `tool` message.
+4. Repeat until the model answers, or stop after 8 model turns.
+
+Rejected locally, never sent to the server: unknown tool names, arguments that are not a JSON object, more than 4 tool calls in one turn. Server errors (e.g. access denied) are shown to the model.
+
+**Evaluation (6 tasks, real MCP server, temperature 0.7)**
+
+| Configuration | Tasks correct | Tool calls with errors | Time per task |
+|---|---|---|---|
+| llama3.2:3b, first prompt (3 seeds) | 12 / 18 | 9 / 18 | 4.9 s |
+| llama3.1 8B, same prompt (3 seeds) | 12 / 18 | 10 / 20 | 15.5 s |
+| llama3.2:3b, final prompt + identifier hints in tool descriptions (5 seeds) | **28 / 30** | 7 / 30 | **4.7 s** |
+
+Tasks: read lab temperature/humidity; list files in `docs`; create a note; turn on the LED as a viewer (must be refused); turn on the LED as an operator; weather in Lahore.
+
+Findings: both models guessed identifiers (`"temperature"`, `"lab LED"`) instead of looking them up. The larger model was no more accurate and three times slower, so the cause was the information available to the model, not model size. Fixes: the system prompt tells the agent to look identifiers up with a listing tool and to correct a failed call (the first prompt had told it not to retry); tool descriptions state where identifiers come from, as real MCP servers commonly do (e.g. "Sensor ids come from list_devices (e.g. 'dht22-lab')"). **Decision: llama3.2:3b is the default model** — equally accurate here and three times faster, which matters for thousands of sessions.
+
+The remaining ~23% of tool calls that error (some later corrected by the model) are kept: real agents make mistakes, and benign sessions that never error would themselves be an artificial signal.
+
+**Reproducibility:** every run records model name, temperature and seed (a random seed is chosen and recorded when none is given); `model_digest()` returns the installed model's digest.
+
+**Test results:** 219 tests pass, three consecutive runs. Includes a real end-to-end test: llama3.2:3b, authenticated as `alice`, reads a sensor over real HTTP inside a captured session-runner session; the manifest row is valid and the audit log shows `read_sensor / alice / allowed`.
+
+**Mutation tests (6 of 6 caught):** unknown tools sent to the server · results not truncated · no cap on calls per turn · step limit ignored · Ollama HTTP errors ignored · invalid JSON arguments treated as no arguments.
+
+**Usage**
+```powershell
+cd software_testbed\llm
+python agent.py "What is the temperature in the lab?" --principal alice
+```
+
+**Security review**
+
+| Risk | Finding | Action |
+|---|---|---|
+| Model triggers harmful actions | The model chooses tool calls | Every call is limited by the caller's role on the server; the world is synthetic; actuators are simulated |
+| Runaway agent | A model can loop | At most 8 turns and 4 calls per turn; LLM timeout 180 s; session-runner time limit |
+| Unvalidated model output reaching the server | Hallucinated tools or malformed arguments | Rejected locally; the server validates arguments against its schemas again |
+| Agent trusts tool output and descriptions | By design — this is what AT-01/AT-03 exploit | Intentional for the experiments; contained in the synthetic testbed |
+| Ollama exposed to the network | — | Listens on `127.0.0.1:11434` only; no `OLLAMA_HOST` override (verified) |
+| Model traffic in captures | — | Port 11434 is outside the capture filter |
+| Label leakage via timing (D13) | LLM and scripted sessions differ in timing | Rule recorded for Parts 3–4 |
+
+**Viva notes**
+- *What is an agent loop?* The model proposes an action (a tool call), the program executes it and returns the result, and the model decides the next step — until it can answer.
+- *What is function/tool calling?* The model is given tool names, descriptions and argument schemas, and replies with a structured request (`read_sensor` with `{"sensor_id": "dht22-lab"}`) instead of free text.
+- *Why does the agent trust tool descriptions and outputs?* That is how MCP agents work, and it is the weakness tool poisoning and prompt injection exploit; the testbed reproduces it on purpose.
+- *Why choose the 3B model over the 8B?* Measured: same accuracy on the testbed tasks, three times faster. The accuracy problem was missing information (where identifiers come from), solved by better descriptions, not a bigger model.
+- *Why keep the agent's mistakes in benign traffic?* Real agents err; if benign sessions never contained errors, "contains an error" would wrongly signal an attack.
+- *Why record the seed and model?* So a session's model behaviour can be reproduced and reported (contract §11).
+- *What is the timing-leakage risk?* LLM sessions are slower between calls than scripted ones; if one label used mostly LLM sessions, timing would reveal the label (D13).

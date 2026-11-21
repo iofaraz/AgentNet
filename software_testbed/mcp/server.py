@@ -42,16 +42,19 @@ DESCRIPTIONS = {
     "get_weather": "Get the current weather for a city.",
     "get_server_status": "Get this server's name, version, uptime and number of tools and devices.",
     "list_files": "List the files in the lab workspace, optionally only inside one folder.",
-    "read_file": "Read a text file from the lab workspace.",
+    "read_file": "Read a text file from the lab workspace. Paths come from list_files (e.g. 'public/faq.md').",
     "search_files": "Search the lab workspace files for lines containing a word or phrase.",
     "create_note": "Create a personal note with a title and body.",
     "list_notes": "List your personal notes.",
-    "get_note": "Read one of your personal notes by its id.",
-    "delete_note": "Delete one of your personal notes by its id.",
-    "list_devices": "List the lab's sensors and actuators with their current state.",
-    "read_sensor": "Read the current temperature, humidity (and pressure, if available) from a sensor.",
-    "set_led": "Switch a lab LED on or off and set its colour. Requires the operator role.",
-    "sound_buzzer": "Sound a lab buzzer for a number of milliseconds (max 2000). Requires the operator role.",
+    "get_note": "Read one of your personal notes by its id. Note ids come from list_notes.",
+    "delete_note": "Delete one of your personal notes by its id. Note ids come from list_notes.",
+    "list_devices": "List the lab's sensors and actuators (with their ids, types and current state).",
+    "read_sensor": ("Read the current temperature, humidity (and pressure, if available) from a sensor. "
+                    "Sensor ids come from list_devices (e.g. 'dht22-lab')."),
+    "set_led": ("Switch a lab LED on or off and set its colour. LED ids come from list_devices "
+                "(e.g. 'led-lab'). Requires the operator role."),
+    "sound_buzzer": ("Sound a lab buzzer for a number of milliseconds (max 2000). Buzzer ids come from "
+                     "list_devices (e.g. 'buzzer-lab'). Requires the operator role."),
 }
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False)
