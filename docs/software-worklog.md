@@ -19,8 +19,8 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 | **1. Foundation** | 1.1 Manifest schema and validator | 5–7 | ✅ Done |
 | | 1.1b Session ID format with environment letter | 5–7 | ✅ Done |
 | | 1.2 Automated capture (dumpcap) | 5–7 | ✅ Done |
-| | 1.3 Session runner (capture → run → stop → log) | 5–7 | ⏳ Next |
-| | 1.4 End-to-end test with the existing agents | 5–7 | Pending |
+| | 1.3 Session runner (capture → run → stop → log) | 5–7 | ✅ Done |
+| | 1.4 End-to-end test with the existing agents | 5–7 | ⏳ Next |
 | **2. Realistic testbed** | 2.1 Richer MCP server (files, synthetic secrets, mock device) | 5 | Pending |
 | | 2.2 LLM-driven MCP agent (Ollama) | 5 | Pending |
 | | 2.3 LLM-driven A2A agents | 5 | Pending |
@@ -54,7 +54,7 @@ Items that need a decision from both team members, or that affect the hardware s
 | D5 | **Timezone convention.** Contract asks for one convention but does not name it. | ISO 8601 local time with UTC offset and milliseconds, e.g. `2026-11-21T15:46:00.123+05:00`. Validator rejects a manifest that mixes offset and no-offset times. | Hardware side to use the same format. |
 | D6 | **Phase 2–3 captures and sample manifest.** `traffic/samples/mcp_benign_manifest.csv` has no header row and an older column layout, and its PCAPs are not on the software machine (captures are git-ignored). | Left unchanged. Not migrated to the new manifest because its timestamps are unknown and labels must not be guessed (taxonomy §6, rule 6). | Hardware side holds the original PCAPs if they are needed. |
 | D7 | **Capture backup.** `.gitignore` excludes `*.pcapng`, `traffic/pcaps/*`, `dataset/raw/*` and `dataset/processed/*`, so pushing does **not** back up captures or processed data. | Noted. To be solved before the first collection run (subpart 3.2). Captures are made read-only with a SHA-256 hash (1.2), so a backup copy can be verified. | Choose a backup location for captures (e.g. shared drive or GitHub release assets). |
-| D8 | **Where capture hashes are stored.** The contract's manifest has no hash column, and its schema must not change without agreement. | `CaptureResult.sha256` is computed for every capture; where it is recorded is decided in 1.3. | — |
+| D8 | **Where capture hashes are stored.** The contract's manifest has no hash column, and its schema must not change without agreement. | **Resolved in 1.3:** a separate capture log `dataset/labels/capture_log.csv` (one row per session, valid or excluded) holds hash, packet/drop counts, scenario name, software versions and exclusion reasons. The manifest is unchanged. | Hardware side may use the same log format. |
 
 ---
 
@@ -240,3 +240,69 @@ python scripts/capture.py record mcp_benign_software_001.pcapng --filter "tcp po
 - *What is a SYN / FIN?* The TCP packets that open and close a connection. Seeing the first SYN and every FIN proves a recording is complete from start to end.
 - *Why a SHA-256 hash?* A fingerprint of the file; if even one byte changes, the hash changes. It proves the dataset was built from unmodified captures.
 - *How was the ready-signal bug found?* A test with an invalid filter failed; reproducing it by hand showed dumpcap prints "Capturing on" before validating the filter. Tests exist to find exactly this kind of hidden assumption.
+
+---
+
+### 1.3 — Session runner
+
+**Goal:** turn "run one benign or attack scenario" into a single call that allocates the ID, captures, runs, verifies and records — so collection runs (Parts 3–5) cannot produce unlabelled, mislabelled or untraceable sessions.
+
+**Files**
+
+| File | Purpose |
+|---|---|
+| `scripts/runner.py` | `Scenario`, `Outcome`, `SessionRunner`, `SessionResult` |
+| `tests/test_runner.py` | 33 tests, all with real loopback captures |
+| `dataset/labels/capture_log.csv` | Created on the first real session (not yet) |
+
+**One session, step by step**
+1. Check the scenario (protocol, attack ID allowed on that protocol, variant, transport, filter, async function, timeout) — invalid scenarios are refused before anything is recorded.
+2. Take an operating-system file lock (one runner at a time).
+3. Pre-flight: refuse to run if the manifest is invalid or the capture log has a foreign header.
+4. Allocate the next number for this protocol / environment / attack, e.g. `MCP-S-B0007` ↔ `mcp_benign_software_0007.pcapng`.
+5. Start the capture (1.2) — a capture that cannot start raises an error and records nothing.
+6. Record `start_time`, run the scenario under a time limit, record `end_time`.
+7. Stop and verify the capture.
+8. Decide validity. **Excluded** if: the scenario raised an error, timed out, returned something other than an `Outcome`, a benign scenario reported a success value, an attack did not report `True`/`False`, the capture is empty, or packets were dropped.
+9. Valid → append to the manifest (validated again by 1.1). Every session, valid or excluded → one row in the capture log.
+
+**Capture log columns:** `session_id, run_id, scenario, status, reason, capture_file, sha256, packets_captured, packets_dropped, capture_start, capture_stop, software_versions`
+
+**Design decisions**
+
+| Decision | Reason |
+|---|---|
+| One session per capture file, same number as the ID | Contract §6 prefers it; any file can be matched to its row at a glance |
+| Excluded sessions stay out of the manifest but are logged with the reason, and their capture is kept | Contract §9: never silently discard failed experiments; document exclusions. A crashed session is neither a valid benign nor a valid attack example |
+| Attack outcome must be reported explicitly by the scenario | Taxonomy §5: success is checked against predefined conditions, never assumed; an undetermined outcome is excluded rather than guessed |
+| Separate capture log instead of new manifest columns | The manifest schema needs both members' agreement to change; contract §11 asks for versions and configuration to be recorded |
+| Numbers allocated from manifest **and** capture log **and** existing files | An excluded session's ID is used up even though it is not in the manifest; captures may later move to backup storage (D7) |
+| Runner timeout distinguished from a scenario's own `TimeoutError` | A network timeout inside the scenario is a scenario error, not "the runner's limit expired"; the log must state the real cause |
+| Scenarios are `async` functions | MCP and A2A clients are asynchronous, and asyncio can cancel a hung scenario cleanly at the time limit |
+| Ctrl+C during a session | Capture is stopped, the session is logged as excluded ("interrupted"), then the interruption continues |
+| OS file lock | Released automatically if the process dies, so no stale lock can block later runs |
+| `start_time`/`end_time` = scenario boundaries | They fall strictly inside the capture window (tested), so the dataset pipeline can cut exactly the session's packets |
+
+**Test results:** 116 tests pass (54 manifest + 29 capture + 33 runner), three consecutive runs, no dumpcap left running.
+
+**Mutation tests (6 of 6 caught):** no pre-flight check · excluded IDs reusable · orphan capture files ignored · undetermined attack accepted · every `TimeoutError` treated as the runner's · interrupted session not recorded. The "excluded IDs reusable" mutation first survived because a second safeguard (existing capture files) masked it; a test was added for the case the second safeguard cannot cover — captures moved to backup — and the first version of that test was itself too weak (still passed under the mutation) and was corrected.
+
+**Security review**
+
+| Risk | Finding | Action |
+|---|---|---|
+| Spreadsheet formula injection | Error messages and notes are free text | Exclusion reasons pass through `sanitize_free_text`; manifest notes always begin with `scenario=`; device fields are sanitised by `manifest.append` |
+| Large or sensitive text in a version-controlled file | Exception messages are written to the capture log, which is pushed | Reasons capped at 500 characters; scenarios will use synthetic data only (contract §2) |
+| Injection through `run_id` | Used in file contents | Restricted to letters, digits, `.`, `_`, `-` |
+| Two runners at once (duplicate IDs) | — | OS file lock in `traffic/pcaps/.runner.lock` (git-ignored) |
+| Half-written sessions | A failure between writing manifest and log | Both files checked before capturing; the manifest is written only after every check passes |
+| Runaway sessions | — | Time limit per scenario; capture always stopped |
+| Shell / eval / secrets | None in the code or repository | — |
+
+**Viva notes**
+- *What does the runner guarantee?* Every captured session ends up either as a valid labelled row in the manifest or as an excluded row in the capture log with its reason — never unrecorded, never half-recorded.
+- *Why exclude a session instead of labelling it "Failed"?* "Failed" means the attack was attempted and its success condition was not met — real attack traffic. A crash or timeout means the scenario did not run as designed, so its traffic does not represent the label.
+- *Why keep excluded captures at all?* Transparency and reproducibility: anyone can check why a session was excluded, and the exclusion rate is itself a quality measure of the collection.
+- *Why does an excluded session use up an ID?* Session IDs are never reused (contract §4); otherwise the log and a future manifest row would refer to two different sessions with one ID.
+- *What is a race condition, and how is it prevented here?* Two processes reading "the last number is 6" at the same time would both use 7. A lock lets only one runner allocate and record at a time.
+- *What is the difference between capture time and session time?* The capture starts slightly before and ends a grace period after the session; the manifest records the session's own boundaries, which lie inside the capture.
