@@ -60,8 +60,13 @@ class ServerSpec:
 MCP_SERVER = ServerSpec("mcp-server", TESTBED / "mcp", "server.py", 8000, None, audit=True)
 A2A_SERVER = ServerSpec(
     "a2a-server", TESTBED / "a2a", "server.py", 9999,
-    f"http://{HOST}:9999/.well-known/agent-card.json",
+    f"http://{HOST}:9999/.well-known/agent-card.json", audit=True,
 )
+
+# An A2A session also carries the MCP traffic the assistant generates on the
+# requester's behalf: both legs are visible on the network, and attacks such
+# as confused deputy or exfiltration are only recognisable across them.
+A2A_SESSION_BPF = f"tcp port {A2A_SERVER.port} or tcp port {MCP_SERVER.port}"
 
 
 def port_in_use(port: int, host: str = HOST) -> bool:

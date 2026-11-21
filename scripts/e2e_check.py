@@ -43,7 +43,7 @@ MCP_EXPECTED_TOOLS = sorted([
 ])
 MCP_EXPECTED_METHODS = ["server/discover", "tools/list"] + ["tools/call"] * 5
 A2A_AGENT_CARD_PATH = "/.well-known/agent-card.json"
-A2A_EXPECTED_METHODS = {"SendMessage": 10}
+A2A_EXPECTED_METHODS = {"SendMessage": 2}   # one per request in A2A_REQUESTS
 
 
 class ScenarioCheckError(RuntimeError):
@@ -99,21 +99,27 @@ def mcp_basic_tools() -> runner.Scenario:
     )
 
 
-def a2a_echo() -> runner.Scenario:
+A2A_REQUESTS = [
+    "What is the weather in Islamabad?",
+    "Which documents are in the docs folder?",
+]
+
+
+def a2a_lab_assistant() -> runner.Scenario:
     client = _load(testbed.TESTBED / "a2a" / "client.py", "agentnet_a2a_client")
+    failure_texts = ("Sorry, the assistant failed", "Authentication failed")
 
     async def run() -> runner.Outcome:
-        replies = await client.send_messages()
-        expected = [f"Echo Agent received: {m}" for m in client.MESSAGES]
-        if replies != expected:
-            bad = sum(a != b for a, b in zip(replies, expected)) + abs(len(replies) - len(expected))
-            raise ScenarioCheckError(f"{bad} of {len(expected)} replies missing or wrong")
-        return runner.Outcome(notes=f"{len(expected)} messages echoed correctly")
+        replies = await client.send_messages(A2A_REQUESTS, principal="alice")
+        missing = [i for i, r in enumerate(replies) if not r or r.startswith(failure_texts)]
+        if missing:
+            raise ScenarioCheckError(f"no usable reply to request(s) {missing}: {[replies[i] for i in missing]}")
+        return runner.Outcome(notes=f"{len(replies)} requests answered by the Lab Assistant")
 
     spec = testbed.A2A_SERVER
     return runner.Scenario(
-        name="a2a-echo-10", protocol="A2A", attack_id=manifest.BENIGN_ID,
-        bpf=spec.bpf, run=run, timeout=60,
+        name="a2a-lab-assistant", protocol="A2A", attack_id=manifest.BENIGN_ID,
+        bpf=testbed.A2A_SESSION_BPF, run=run, timeout=600,
         source_device="a2a-client@127.0.0.1",
         destination_device=f"{spec.name}@127.0.0.1:{spec.port}",
     )
@@ -139,7 +145,10 @@ def http_requests(pcap: Path, port: int) -> list[tuple[str, str, dict | None]]:
     tshark returns HTTP bodies (http.file_data) as hex, so they are decoded here.
     """
     out = subprocess.run(
-        [str(find_tshark()), "-r", str(pcap), "-d", f"tcp.port=={port},http", "-Y", "http.request",
+        # Only requests sent TO this port: a capture can hold several HTTP
+        # services (an A2A session also carries the assistant's MCP traffic).
+        [str(find_tshark()), "-r", str(pcap), "-d", f"tcp.port=={port},http",
+         "-Y", f"http.request && tcp.dstport == {port}",
          "-T", "fields", "-E", "separator=\t",
          "-e", "http.request.method", "-e", "http.request.uri", "-e", "http.file_data"],
         capture_output=True, text=True, timeout=120,
@@ -233,15 +242,24 @@ def _check_contents(report: E2EReport, sid: str, pcap: Path, entry: dict, protoc
         if methods != MCP_EXPECTED_METHODS:
             problem(f"{sid}: JSON-RPC methods {methods}, expected {MCP_EXPECTED_METHODS}")
     elif protocol == "A2A":
+        # A2A leg: requester <-> Lab Assistant
         requests = http_requests(pcap, testbed.A2A_SERVER.port)
         methods = jsonrpc_methods(requests)
         card = [uri for m, uri, _ in requests if m == "GET" and uri == A2A_AGENT_CARD_PATH]
-        report.observed[sid] = ([f"GET {A2A_AGENT_CARD_PATH}"] * len(card)) + methods
+        # MCP leg in the same capture: Lab Assistant <-> MCP server
+        mcp_methods = jsonrpc_methods(http_requests(pcap, testbed.MCP_SERVER.port))
+        report.observed[sid] = ([f"GET {A2A_AGENT_CARD_PATH}"] * len(card)) + methods + \
+            [f"MCP {m}" for m in mcp_methods]
         if len(card) != 1:
             problem(f"{sid}: expected 1 Agent Card request, saw {len(card)}")
         counts = Counter(methods)
         if counts != Counter(A2A_EXPECTED_METHODS):
             problem(f"{sid}: JSON-RPC methods {dict(counts)}, expected {A2A_EXPECTED_METHODS}")
+        mcp_counts = Counter(mcp_methods)
+        if mcp_counts["server/discover"] != A2A_EXPECTED_METHODS["SendMessage"]:
+            problem(f"{sid}: expected one MCP connection per A2A request, saw {dict(mcp_counts)}")
+        if mcp_counts["tools/call"] < 1:
+            problem(f"{sid}: the assistant made no MCP tool calls ({dict(mcp_counts)})")
     else:
         problem(f"{sid}: unknown protocol {protocol!r}")
 
@@ -259,7 +277,7 @@ def run_e2e(out_dir: Path, sessions: int = 2) -> E2EReport:
         run_id=run_id,
     )
     report = E2EReport(out_dir)
-    scenarios = [mcp_basic_tools(), a2a_echo()]
+    scenarios = [mcp_basic_tools(), a2a_lab_assistant()]
     with testbed.running(testbed.MCP_SERVER, testbed.A2A_SERVER, log_dir=out_dir / "logs", run_id=run_id):
         for _ in range(sessions):
             for scenario in scenarios:

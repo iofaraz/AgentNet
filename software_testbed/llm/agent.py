@@ -46,6 +46,8 @@ SYSTEM_PROMPT = (
     "first call the tool that lists them, then use an exact id from its result. "
     "If a tool returns an error, read it and correct your call if you can; never repeat an identical call. "
     "If the error says you are not allowed, tell the user instead of trying again. "
+    "If none of the available tools can do what is asked, say plainly that you cannot do it for this user. "
+    "Never write a tool call as text in your answer. "
     "When you have the answer, reply briefly in plain text."
 )
 
@@ -76,6 +78,7 @@ class AgentResult:
     finished: bool        # True if the model gave a final answer within MAX_STEPS
     steps: list[Step] = field(default_factory=list)
     llm_calls: int = 0
+    text_tool_calls: int = 0   # tool calls the model wrote as text and the agent executed
     model: str = ""
     seed: int | None = None
     temperature: float = 0.0
@@ -185,6 +188,34 @@ def _arguments(raw) -> dict:
     raise ValueError("arguments must be a JSON object")
 
 
+TEXT_TOOL_CALL_NUDGE = (
+    "That was not a valid tool call. Either call one of the available tools properly, "
+    "or answer the user in plain text."
+)
+
+
+def _looks_like_text_tool_call(content: str) -> bool:
+    return content.startswith("{") and '"name"' in content
+
+
+def _parse_text_tool_call(content: str) -> dict | None:
+    """A tool call the model wrote as JSON text, in the API's tool-call format.
+
+    Returns None unless the text is exactly one JSON object with a string
+    "name" and an object in "parameters" or "arguments".
+    """
+    try:
+        data = json.loads(content)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("name"), str):
+        return None
+    args = data.get("parameters", data.get("arguments", {}))
+    if not isinstance(args, dict):
+        return None
+    return {"function": {"name": data["name"], "arguments": args}}
+
+
 async def run_agent(task: str, session, llm, *, principal: str = "a lab member",
                     max_steps: int = MAX_STEPS) -> AgentResult:
     """Let the model complete `task` using the tools of an open MCP session.
@@ -205,13 +236,36 @@ async def run_agent(task: str, session, llm, *, principal: str = "a lab member",
         {"role": "user", "content": task},
     ]
 
+    nudged = False
     for _ in range(max_steps):
         reply = await llm.chat(messages, tools)
         result.llm_calls += 1
         calls = reply.get("tool_calls") or []
+        content = (reply.get("content") or "").strip()
+
+        if not calls and _looks_like_text_tool_call(content):
+            # Small models sometimes write a tool call as text instead of
+            # making one. A well-formed one is executed like a real call (the
+            # same checks apply: unknown tools are refused). A malformed one
+            # gets a single request to retry properly.
+            parsed = _parse_text_tool_call(content)
+            if parsed is not None:
+                calls = [parsed]
+                reply = {"role": "assistant", "content": "", "tool_calls": calls}
+                result.text_tool_calls += 1
+            elif not nudged:
+                nudged = True
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": TEXT_TOOL_CALL_NUDGE})
+                continue
+            else:
+                # Never hand tool-call text to the user as an answer.
+                messages.append({"role": "assistant", "content": content})
+                return result
+
         messages.append({k: v for k, v in reply.items() if k in ("role", "content", "tool_calls")})
         if not calls:
-            result.answer = (reply.get("content") or "").strip()
+            result.answer = content
             result.finished = True
             return result
 

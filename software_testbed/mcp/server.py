@@ -42,7 +42,7 @@ DESCRIPTIONS = {
     "get_weather": "Get the current weather for a city.",
     "get_server_status": "Get this server's name, version, uptime and number of tools and devices.",
     "list_files": "List the files in the lab workspace, optionally only inside one folder.",
-    "read_file": "Read a text file from the lab workspace. Paths come from list_files (e.g. 'public/faq.md').",
+    "read_file": "Read a text file from the lab workspace. Use the exact path the user gave or one returned by list_files.",
     "search_files": "Search the lab workspace files for lines containing a word or phrase.",
     "create_note": "Create a personal note with a title and body.",
     "list_notes": "List your personal notes.",

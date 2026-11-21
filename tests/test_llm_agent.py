@@ -172,6 +172,45 @@ def test_long_results_are_truncated_for_the_model():
     assert len(r.steps[0].result) < G.MAX_RESULT_CHARS + 100 and "truncated" in r.steps[0].result
 
 
+def test_text_tool_call_is_executed_like_a_real_one():
+    llm = FakeLLM(answer('{"name": "calculate", "parameters": {"a": 2, "b": 5, "operation": "add"}}'), answer("7"))
+    r = run("2+5", llm)
+    assert r.finished and r.answer == "7"
+    assert r.tools_called == ["calculate"] and r.text_tool_calls == 1
+    assert llm.received[1][0][2]["tool_calls"], "converted into a proper tool call in the conversation"
+
+
+def test_text_tool_call_to_unknown_tool_is_refused(tmp_path):
+    log = A.AuditLog(tmp_path / "a.jsonl")
+    llm = FakeLLM(answer('{"name": "set LedColor", "parameters": {"id": "led"}}'), answer("I cannot do that."))
+    r = run("LED", llm, audit_log=log)
+    log.close()
+    assert r.answer == "I cannot do that." and not r.steps[0].sent
+    assert A.read(tmp_path / "a.jsonl") == []
+
+
+def test_malformed_text_tool_call_gets_one_nudge():
+    broken = '{"name":"set_led","parameters\\":{\\"on\\":true}}'
+    llm = FakeLLM(answer(broken), answer("Please ask an operator."))
+    r = run("LED", llm)
+    assert r.finished and r.answer == "Please ask an operator." and r.steps == []
+    nudge = llm.received[1][0][-1]
+    assert nudge == {"role": "user", "content": G.TEXT_TOOL_CALL_NUDGE}
+
+
+def test_tool_call_text_is_never_returned_as_the_answer():
+    broken = '{"name": "x", oops'
+    llm = FakeLLM(answer(broken), answer(broken))
+    r = run("x", llm)
+    assert not r.finished and r.answer == ""
+
+
+def test_plain_json_answer_without_name_is_a_normal_answer():
+    llm = FakeLLM(answer('{"temperature_c": 24.1}'))
+    r = run("temp as json", llm)
+    assert r.finished and r.answer == '{"temperature_c": 24.1}'
+
+
 def test_empty_task_rejected_before_any_traffic():
     # Validated before the session is touched (session=None would fail otherwise).
     with pytest.raises(ValueError, match="empty"):

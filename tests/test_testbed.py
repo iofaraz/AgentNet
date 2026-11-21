@@ -38,7 +38,8 @@ def test_specs_match_the_server_scripts():
         hosts = re.findall(r'(?:host=|HOST = )"([^"]+)"', source)
         assert hosts and set(hosts) == {"127.0.0.1"}, f"{spec.name} must bind to 127.0.0.1 only, found {hosts}"
     assert t.MCP_SERVER.bpf == "tcp port 8000" and t.A2A_SERVER.bpf == "tcp port 9999"
-    assert t.MCP_SERVER.audit and not t.A2A_SERVER.audit
+    assert t.MCP_SERVER.audit and t.A2A_SERVER.audit
+    assert t.A2A_SESSION_BPF == "tcp port 9999 or tcp port 8000"
 
 
 def test_start_ready_stop(tmp_path):

@@ -1,10 +1,13 @@
 """End-to-end test: real MCP and A2A servers, real sessions, captures read back.
 
-The real run happens once (about 30 s) and is shared by the tests below.
-Skipped when capture tools are missing or the testbed ports are already taken.
+The real run happens once (about 1 minute; the A2A Lab Assistant uses the
+local model) and is shared by the tests below. Skipped when capture tools or
+the Ollama model are missing, or the testbed ports are already taken.
 """
 
+import asyncio
 import shutil
+import sys
 
 import pytest
 
@@ -14,18 +17,25 @@ import manifest
 import runner
 import testbed
 
+sys.path.insert(0, str(testbed.TESTBED / "llm"))
+sys.path.insert(0, str(testbed.TESTBED / "mcp"))
+import agent  # noqa: E402
+import audit  # noqa: E402
+
 
 def _available():
     try:
         capture.find_dumpcap()
         capture.loopback_interface()
         e.find_tshark()
-    except capture.CaptureError:
+        asyncio.run(agent.model_digest(agent.DEFAULT_MODEL))
+    except Exception:
         return False
     return not (testbed.port_in_use(testbed.MCP_SERVER.port) or testbed.port_in_use(testbed.A2A_SERVER.port))
 
 
-pytestmark = pytest.mark.skipif(not _available(), reason="capture tools missing or testbed ports in use")
+pytestmark = pytest.mark.skipif(not _available(),
+                                reason="capture tools or Ollama model missing, or testbed ports in use")
 
 
 @pytest.fixture(scope="module")
@@ -46,14 +56,30 @@ def test_end_to_end(e2e):
     assert e2e.ok, e2e.problems
     assert [r.session_id for r in e2e.results] == ["MCP-S-B0001", "A2A-S-B0001"]
     assert e2e.observed["MCP-S-B0001"] == e.MCP_EXPECTED_METHODS
-    assert e2e.observed["A2A-S-B0001"].count("SendMessage") == 10
+    a2a_seen = e2e.observed["A2A-S-B0001"]
+    assert a2a_seen.count("SendMessage") == len(e.A2A_REQUESTS)
+    assert a2a_seen.count("MCP server/discover") == len(e.A2A_REQUESTS), "one MCP connection per request"
+    assert "MCP tools/call" in a2a_seen, "the A2A capture includes the assistant's MCP leg"
     rows, mreport = manifest.load(e2e.out_dir / "manifest.csv")
     assert mreport.ok and len(rows) == 2
     logs = sorted(p.name for p in (e2e.out_dir / "logs").iterdir())
-    assert len(logs) == 3, logs
-    assert sum(p.endswith("_mcp-server.log") for p in logs) == 1
-    assert sum(p.endswith("_a2a-server.log") for p in logs) == 1
-    assert sum(p.endswith("_mcp-server_audit.jsonl") for p in logs) == 1
+    assert len(logs) == 4, logs
+    for suffix in ("_mcp-server.log", "_a2a-server.log", "_mcp-server_audit.jsonl", "_a2a-server_audit.jsonl"):
+        assert sum(p.endswith(suffix) for p in logs) == 1, suffix
+
+
+def test_a2a_session_audits_link_requester_to_mcp_calls(e2e):
+    # A2A audit: who asked. MCP audit: what the assistant then did, as ops-agent.
+    from datetime import datetime
+    rows = {r["session_id"]: r for r in manifest.load(e2e.out_dir / "manifest.csv")[0]}
+    a2a = rows["A2A-S-B0001"]
+    start, end = datetime.fromisoformat(a2a["start_time"]), datetime.fromisoformat(a2a["end_time"])
+    logs = e2e.out_dir / "logs"
+    tasks = audit.between(audit.read(next(logs.glob("*_a2a-server_audit.jsonl"))), start, end)
+    assert [(t["tool"], t["principal"], t["decision"]) for t in tasks] == \
+        [("a2a_task", "alice", "allowed")] * len(e.A2A_REQUESTS)
+    mcp_calls = audit.between(audit.read(next(logs.glob("*_mcp-server_audit.jsonl"))), start, end)
+    assert mcp_calls and {c["principal"] for c in mcp_calls} == {"ops-agent"}
 
 
 def test_audit_entries_match_the_session_window(e2e):
@@ -70,7 +96,9 @@ def test_audit_entries_match_the_session_window(e2e):
     window = audit.between(entries, datetime.fromisoformat(mcp["start_time"]), datetime.fromisoformat(mcp["end_time"]))
     assert [e["tool"] for e in window] == ["calculate", "get_weather", "list_files", "read_file", "read_sensor"]
     assert {(e["principal"], e["role"], e["decision"]) for e in window} == {("alice", "viewer", "allowed")}
-    assert window == entries, "the only MCP session's calls all fall inside its window"
+    outside = [x for x in entries if x not in window]
+    assert {x["principal"] for x in outside} == {"ops-agent"}, \
+        "every other MCP call belongs to the A2A session's assistant"
     assert not testbed.port_in_use(testbed.MCP_SERVER.port), "servers must be stopped afterwards"
     assert not capture._running
 

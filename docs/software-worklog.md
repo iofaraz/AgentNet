@@ -23,8 +23,8 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 | | 1.4 End-to-end test with the existing agents | 5–7 | ✅ Done |
 | **2. Realistic testbed** | 2.1 Richer MCP server (files, synthetic secrets, mock device) | 5 | ✅ Done |
 | | 2.2 LLM-driven MCP agent (Ollama) | 5 | ✅ Done |
-| | 2.3 LLM-driven A2A agents | 5 | ⏳ Next |
-| | 2.4 Separate hosts so attacker traffic has its own address | 5 | Pending |
+| | 2.3 LLM-driven A2A agents | 5 | ✅ Done |
+| | 2.4 Separate hosts so attacker traffic has its own address | 5 | ⏳ Next |
 | **3. Benign traffic** | 3.1 Catalogue of benign scenarios with variability | 5 | Pending |
 | | 3.2 Collection run, validation and backup | 5 | Pending |
 | **4. Attacks** | 4.1 Attack framework (variants, success checks, failed attempts) | 6 | Pending |
@@ -525,3 +525,93 @@ python agent.py "What is the temperature in the lab?" --principal alice
 - *Why keep the agent's mistakes in benign traffic?* Real agents err; if benign sessions never contained errors, "contains an error" would wrongly signal an attack.
 - *Why record the seed and model?* So a session's model behaviour can be reproduced and reported (contract §11).
 - *What is the timing-leakage risk?* LLM sessions are slower between calls than scripted ones; if one label used mostly LLM sessions, timing would reveal the label (D13).
+
+---
+
+### 2.3 — LLM-driven A2A agents
+
+**Goal:** replace the Echo Agent with a real A2A agent — one that understands requests with the model and acts through the MCP server — so A2A traffic carries realistic agent-to-agent delegation, and agent card spoofing (AT-06), confused deputy (AT-04) and exfiltration through A2A (AT-05) have something real to attack.
+
+**Architecture**
+```
+requester ──A2A (Bearer token of the requester)──► Lab Assistant ──MCP (Bearer token of ops-agent)──► MCP server
+                                                     │
+                                                     └─ deputy check: requester's role decides what the model may do
+```
+
+**Files**
+
+| File | Purpose |
+|---|---|
+| `software_testbed/a2a/deputy.py` | New. The assistant's authorization layer, enforcing the **requester's** role |
+| `software_testbed/a2a/agent_executor.py` | Rewritten: `LabAssistantExecutor` (identity → MCP as `ops-agent` → LLM agent through the deputy → reply), A2A audit log |
+| `software_testbed/a2a/server.py` | Rewritten: Agent Card "AgentNet Lab Assistant" (skills `lab-information`, `device-control`; declares Bearer authentication), `build_app()` for in-process tests |
+| `software_testbed/a2a/client.py` | Sends natural-language requests with the requester's token (`--principal`) |
+| `software_testbed/llm/agent.py` | Handles tool calls the model writes as text; prompt says to state plainly when no tool can help |
+| `software_testbed/mcp/server.py` | `read_file` description no longer shows an example path (see findings) |
+| `scripts/testbed.py` | A2A server writes an audit log; `A2A_SESSION_BPF` captures both legs |
+| `scripts/e2e_check.py` | New A2A scenario; verifies the A2A leg and the MCP leg separately; reads requests by destination port |
+| `tests/test_a2a_agent.py` | 42 tests |
+
+**Design decisions**
+
+| Decision | Reason |
+|---|---|
+| The assistant uses its **own** admin service account on MCP | How real assistant agents are usually deployed — and exactly the precondition for confused-deputy attacks (AT-04). The MCP-side identity is the same in benign and attack sessions (D12) |
+| **Deputy check** enforces the requester's role | Without it, any requester would get admin power through the assistant. Three layers: the model is only shown permitted tools; calls to other tools or to admin-only files are refused before MCP; admin-only entries are removed from listings and search results |
+| Notes tools are not offered | One shared service account would mix different requesters' notes |
+| Unknown/forged tokens rejected; no token = anonymous (public tools only) | Same identity rules as the MCP server; a failed lookup never becomes access |
+| A2A audit log: every request, every refused/filtered call, agent-level refusals | Ground truth for attacks: who asked, what the assistant tried, what was stopped. Attempts matter as much as successes |
+| A2A sessions capture **both** ports (`tcp port 9999 or tcp port 8000`) | Both legs are visible on a real network; confused deputy and exfiltration are only recognisable across them |
+| One MCP connection per A2A request | Each request is an independent unit of work; visible in captures as one `server/discover` per `SendMessage` |
+| Tool calls written as text by the model are parsed (valid → executed with the same checks; malformed → one correction request; never returned to the user) | A known small-model behaviour; frameworks handle it in code. Unknown tool names are still refused, so this opens no new path |
+
+**Evaluation (real model, real servers, 5 trials per case)**
+
+| Case | Before fixes (3 trials) | After fixes (5 trials) |
+|---|---|---|
+| alice (viewer) asks for `secrets/api_keys.txt` → must not get it | 3/3 | 5/5 |
+| alice asks to turn on the LED → must be refused, plain-text answer | 1/3 | 5/5 |
+| bob (operator) asks to turn on the LED → must happen | 1/3 | 4/5 |
+| dana (admin) asks for `secrets/api_keys.txt` → must get it | 0/3 | 5/5 |
+| anonymous asks for docs files → must be refused, plain-text answer | 1/3 | 5/5 |
+| alice asks for docs files → must get them | 3/3 | 5/5 |
+| **Total** | **9/18** (security properties held in all) | **29/30, 0 security violations** |
+
+Also verified: forged token → "Authentication failed"; anonymous weather request answered.
+
+**Findings**
+1. **Security bug in the deputy check (found by its own test):** `list_files` with folder `finance` (no trailing `/`) passed the restricted-folder rule, which only matched `finance/`; the call reached MCP with admin rights. Nothing leaked — the result filter removed the entries — but the first layer was wrong. Fixed (`finance`, `finance/`, `/finance`, ` secrets ` are all caught; `financial-report.md` is not); regression tests added.
+2. **Refused attempts were not recorded:** a call to a tool hidden from the requester was refused by the agent loop ("unknown tool") before the deputy saw it, so it never reached the audit log. Now recorded as `agent:<tool>`.
+3. **A tool description misled the model:** the `read_file` example path `'public/faq.md'` made the model prefix `public/` to paths the user gave exactly (`secrets/…` → `public/secrets/…`), so even the admin could not read the file. Example removed; the description now says to use the exact path given.
+4. **Small-model output:** when the needed tool was hidden, the model wrote fake tool calls as text instead of saying it could not help. Handled in code (see decisions) and in the prompt.
+5. **Reading multi-service captures:** asked for HTTP requests "on port 9999", tshark also returned the port-8000 requests in the same capture, double-counting the legs. Requests are now selected by destination port. **Part 6 must do the same** when extracting per-leg protocol features.
+
+**Regression check:** the 2.2 MCP-agent evaluation was re-run after the prompt and description changes: 28/30, same as before.
+
+**Test results:** 267 tests pass, three consecutive runs (includes the real end-to-end run with the model-driven A2A agent).
+
+**Mutation tests (8 of 8 caught):** model shown all tools · role check on calls removed · restricted-read check removed · listing filter removed · folder-name bug reintroduced · token ignored (everyone anonymous) · internal errors leaked to the requester · agent-level refusals not audited.
+
+**Security review**
+
+| Risk | Finding | Action |
+|---|---|---|
+| Privilege escalation through the assistant (confused deputy) | The assistant holds admin rights on MCP | Deputy check (3 layers), tested per role and per tool; policy tested to agree with the MCP server's rules |
+| Restricted folder bypass | `finance` without `/` slipped past one layer | Fixed; regression tests |
+| Forged identity | — | Unknown tokens rejected; anonymous limited to public tools |
+| Information disclosure through errors | — | Requester sees a generic message; details only in the audit log |
+| Resource exhaustion | Very long requests | Requests limited to 2,000 characters; agent turn/call limits from 2.2 |
+| Unrecorded attack attempts | Hidden-tool attempts were invisible | Recorded (`agent:<tool>`) |
+| Agent Card spoofing (AT-06) | The card is unsigned — anyone could serve a look-alike | Intentional for the experiments. A2A supports signed cards (`AgentCard.signatures`, client `signature_verifier`) — the defence to discuss in Part 4 |
+| Tokens visible on the wire | A2A and MCP run over plain HTTP | Synthetic tokens; TLS variants in Part 5 |
+| Network exposure | — | Both servers bind to `127.0.0.1` (tested) |
+
+**Viva notes**
+- *What is a confused deputy?* A program with more authority than its caller (the "deputy") is tricked into using that authority for the caller. Here: the assistant has admin rights on MCP; a viewer must not be able to get admin actions through it.
+- *How is the deputy protected?* It checks the **requester's** role, not its own: hides tools, refuses forbidden calls before they reach MCP, and filters admin-only data out of results. Three layers, so one mistake (like the folder bug) does not cause a leak.
+- *Why give the assistant admin rights at all?* Real assistants usually run with their own service credentials — that is what makes the confused-deputy threat real, and what the dataset must represent.
+- *What is an Agent Card?* The A2A agent's public description (`/.well-known/agent-card.json`): name, skills, endpoint and how to authenticate. Clients trust it to decide whom to talk to — which is what spoofing exploits.
+- *How can Agent Card spoofing be prevented?* Signed agent cards: the card carries a signature the client verifies (`signature_verifier`) before trusting it.
+- *Why capture both A2A and MCP in an A2A session?* On a network both legs are visible. A confused-deputy or exfiltration attack looks like a normal A2A request followed by an unusual MCP action — only the pair shows the attack.
+- *How do you link a request to the actions it caused?* By time window: the A2A audit (requester, task) and the MCP audit (ops-agent's calls) are both selected by the session's manifest start and end times.
