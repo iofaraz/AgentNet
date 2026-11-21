@@ -20,8 +20,8 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 | | 1.1b Session ID format with environment letter | 5–7 | ✅ Done |
 | | 1.2 Automated capture (dumpcap) | 5–7 | ✅ Done |
 | | 1.3 Session runner (capture → run → stop → log) | 5–7 | ✅ Done |
-| | 1.4 End-to-end test with the existing agents | 5–7 | ⏳ Next |
-| **2. Realistic testbed** | 2.1 Richer MCP server (files, synthetic secrets, mock device) | 5 | Pending |
+| | 1.4 End-to-end test with the existing agents | 5–7 | ✅ Done |
+| **2. Realistic testbed** | 2.1 Richer MCP server (files, synthetic secrets, mock device) | 5 | ⏳ Next |
 | | 2.2 LLM-driven MCP agent (Ollama) | 5 | Pending |
 | | 2.3 LLM-driven A2A agents | 5 | Pending |
 | | 2.4 Separate hosts so attacker traffic has its own address | 5 | Pending |
@@ -54,6 +54,8 @@ Items that need a decision from both team members, or that affect the hardware s
 | D5 | **Timezone convention.** Contract asks for one convention but does not name it. | ISO 8601 local time with UTC offset and milliseconds, e.g. `2026-11-21T15:46:00.123+05:00`. Validator rejects a manifest that mixes offset and no-offset times. | Hardware side to use the same format. |
 | D6 | **Phase 2–3 captures and sample manifest.** `traffic/samples/mcp_benign_manifest.csv` has no header row and an older column layout, and its PCAPs are not on the software machine (captures are git-ignored). | Left unchanged. Not migrated to the new manifest because its timestamps are unknown and labels must not be guessed (taxonomy §6, rule 6). | Hardware side holds the original PCAPs if they are needed. |
 | D7 | **Capture backup.** `.gitignore` excludes `*.pcapng`, `traffic/pcaps/*`, `dataset/raw/*` and `dataset/processed/*`, so pushing does **not** back up captures or processed data. | Noted. To be solved before the first collection run (subpart 3.2). Captures are made read-only with a SHA-256 hash (1.2), so a backup copy can be verified. | Choose a backup location for captures (e.g. shared drive or GitHub release assets). |
+| D9 | **Real host details in captures.** The demo MCP tool `get_system_info` returns the real OS, Python version and CPU type, so every MCP capture contains them. Privacy issue if the dataset is shared, and an environment-specific signal (software and hardware hosts answer differently) that a model could use to tell environments apart instead of learning behaviour. | Not changed in 1.4 (changing testbed tools is subpart 2.1). | Replace with synthetic, environment-neutral answers in 2.1. |
+| D10 | **Demo agents produce identical sessions.** In 1.4, every MCP session was 47 packets / 10,304 bytes and every A2A session 100 packets / 17,188 bytes. A dataset of such sessions would let a model memorise sizes instead of learning behaviour. | Evidence recorded; the demo sessions are not added to the dataset manifest. | Variability is the goal of Part 2 and subpart 3.1. |
 | D8 | **Where capture hashes are stored.** The contract's manifest has no hash column, and its schema must not change without agreement. | **Resolved in 1.3:** a separate capture log `dataset/labels/capture_log.csv` (one row per session, valid or excluded) holds hash, packet/drop counts, scenario name, software versions and exclusion reasons. The manifest is unchanged. | Hardware side may use the same log format. |
 
 ---
@@ -306,3 +308,67 @@ python scripts/capture.py record mcp_benign_software_001.pcapng --filter "tcp po
 - *Why does an excluded session use up an ID?* Session IDs are never reused (contract §4); otherwise the log and a future manifest row would refer to two different sessions with one ID.
 - *What is a race condition, and how is it prevented here?* Two processes reading "the last number is 6" at the same time would both use 7. A lock lets only one runner allocate and record at a time.
 - *What is the difference between capture time and session time?* The capture starts slightly before and ends a grace period after the session; the manifest records the session's own boundaries, which lie inside the capture.
+
+---
+
+### 1.4 — End-to-end test with the existing agents
+
+**Goal:** prove that Part 1 works as a whole on the real MCP and A2A agents — the "initial integration test" of contract §13: produce a capture and a matching metadata record, and read the capture back.
+
+**Files**
+
+| File | Purpose |
+|---|---|
+| `scripts/testbed.py` | Starts/stops the testbed servers (`MCP_SERVER`, `A2A_SERVER`, `running(...)`) |
+| `scripts/e2e_check.py` | Benign scenarios on the existing clients, the end-to-end run and the read-back verification; command-line tool |
+| `software_testbed/mcp/client.py` | Refactored: `exercise_tools()` returns the answers (still runnable by hand) |
+| `software_testbed/a2a/client.py` | Refactored: `send_messages()` returns the replies (still runnable by hand) |
+| `tests/test_testbed.py` | 9 tests with throw-away server scripts |
+| `tests/test_e2e.py` | 7 tests sharing one real end-to-end run |
+
+**What the end-to-end run does**
+1. Starts the real MCP (port 8000) and A2A (port 9999) servers — refusing if a port is already taken — and waits until they are ready (A2A: Agent Card answers 200).
+2. Runs real sessions through the session runner (1.3): `mcp-basic-tools` and `a2a-echo-10`. Each scenario **checks the answers** (tool list, `calculate_sum(10, 20) = 30`, city in the weather answer, all 10 echoes exact); a wrong answer makes the session excluded rather than "benign".
+3. Stops the servers gracefully (Ctrl+Break; logs end with "Application shutdown complete").
+4. Reads every capture back: manifest validates; every valid session has a log row; SHA-256 still matches; tshark's packet count equals dumpcap's; the capture contains exactly the expected protocol messages.
+
+**Result (real run, 2 sessions per scenario):** 4 of 4 sessions valid and verified.
+
+| Session | Packets | Messages found in the capture |
+|---|---|---|
+| `MCP-S-B0001`, `MCP-S-B0002` | 47 each | `server/discover`, `tools/list`, `tools/call` ×3 |
+| `A2A-S-B0001`, `A2A-S-B0002` | 100 each | `GET /.well-known/agent-card.json`, `SendMessage` ×10 |
+
+**Client refactors.** Network behaviour is unchanged (same requests, same order, same 1-second gaps between A2A messages), with one deliberate exception: the A2A client no longer waits 1 second **after the last** message. That wait produced no traffic, only an idle tail at the end of every benign session; attack sessions would not have it, so it would be a spurious "benign" signal (data leakage). Manual runs (`python client.py`) were re-checked and still work.
+
+**Why these sessions are not in the dataset manifest:** they come from the Phase 2–3 demonstration agents, which Part 2 replaces; mixing them in would add unrepresentative, identical sessions (D10). The run writes to its own output folder.
+
+**Findings recorded:** D9 (real host details inside MCP captures), D10 (identical demo sessions).
+
+**Test results:** 132 tests pass (54 manifest + 29 capture + 33 runner + 9 testbed + 7 end-to-end), three consecutive runs, no dumpcap or server left running.
+
+**Mutation tests (5 of 5 caught):** port-in-use check removed · servers not stopped by `running()` · hash check removed · MCP message check removed · A2A message check removed. The MCP-message mutation first survived because the real agents always send the right messages, so no test ever showed the checker a wrong capture; tests were added that feed it wrong expectations for MCP and A2A.
+
+**Usage**
+```powershell
+python scripts/e2e_check.py --sessions 2
+```
+
+**Security review**
+
+| Risk | Finding | Action |
+|---|---|---|
+| Recording a foreign program on a testbed port | Something else could be listening on 8000/9999 | Server manager refuses to start when the port is in use |
+| Servers reachable from the network | — | Both bind to `127.0.0.1`; a test now fails if a server script stops doing so |
+| Server logs pushed to GitHub | Logs may contain request details | In collection runs logs go to `dataset/raw/` (git-ignored, verified); the end-to-end check writes to its own folder |
+| Overwriting earlier results | — | Server logs opened in exclusive mode; end-to-end output folder must be empty |
+| Orphaned servers | A failure could leave servers running | Always stopped in `finally`, including when a later server fails to start (tested) |
+| Real host information in captures | `get_system_info` returns real OS/Python/CPU details | Recorded as D9, fixed in 2.1 |
+| Shell / eval / secrets | None | — |
+
+**Viva notes**
+- *What does "end-to-end" mean here?* The whole chain on the real agents: servers → session → capture → manifest + log → capture read back and compared with the records.
+- *Why check the server's answers in a benign scenario?* "Benign" must mean the session behaved normally. If a server misbehaves, its traffic is not representative of normal traffic, so the session is excluded instead of labelled.
+- *Why read captures back with a different tool (tshark) than the one that wrote them (dumpcap)?* An independent check: the packet count and the protocol messages are confirmed by a second program, not by trusting the writer.
+- *What is data leakage, with an example from this project?* A signal that reveals the label without being real attack behaviour — e.g. a 1-second idle tail present only in benign sessions, or host details that differ only between environments.
+- *Why are identical sessions a problem?* A model can memorise exact packet counts and sizes instead of learning behaviour, giving perfect accuracy on the dataset and failing on anything new.
