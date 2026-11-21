@@ -25,8 +25,8 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 | | 2.2 LLM-driven MCP agent (Ollama) | 5 | ✅ Done |
 | | 2.3 LLM-driven A2A agents | 5 | ✅ Done |
 | | 2.4 Separate hosts so attacker traffic has its own address | 5 | ✅ Done |
-| **3. Benign traffic** | 3.1 Catalogue of benign scenarios with variability | 5 | ⏳ Next |
-| | 3.2 Collection run, validation and backup | 5 | Pending |
+| **3. Benign traffic** | 3.1 Catalogue of benign scenarios with variability | 5 | ✅ Done |
+| | 3.2 Collection run, validation and backup | 5 | ⏳ Next |
 | **4. Attacks** | 4.1 Attack framework (variants, success checks, failed attempts) | 6 | Pending |
 | | 4.2–4.8 AT-01 to AT-07, one subpart each | 6 | Pending |
 | | 4.9 Attack collection run | 6 | Pending |
@@ -58,7 +58,7 @@ Items that need a decision from both team members, or that affect the hardware s
 | D11 | **Tool names shared with the hardware side.** Software-to-hardware evaluation compares the same behaviour in two environments; if the ESP32 MCP server names or shapes its sensor/actuator tools differently, the two datasets differ for reasons unrelated to the environment. | Software uses `list_devices`, `read_sensor(sensor_id)`, `set_led(device_id, on, color)`, `sound_buzzer(device_id, duration_ms)` with DHT22/BME280 sensor types. | Hardware side to confirm or share its tool names and argument shapes; align before collection (3.2). |
 | D12 | **Label leakage through identities.** Bearer tokens travel in plaintext HTTP and appear in captures. If attack sessions used identities that benign sessions never use (e.g. an "attacker" user), a model could detect attacks from the token alone. | Tokens are opaque (no user names inside) and synthetic. | Rule for Part 4: attack sessions use the same identities as benign sessions (e.g. a compromised `bob`). Rule for Part 6: tokens and identities are not model features. |
 | D10 | **Demo agents produce identical sessions.** In 1.4, every MCP session was 47 packets / 10,304 bytes and every A2A session 100 packets / 17,188 bytes. A dataset of such sessions would let a model memorise sizes instead of learning behaviour. | Evidence recorded; the demo sessions are not added to the dataset manifest. | Variability is the goal of Part 2 and subpart 3.1. |
-| D13 | **Label leakage through the session driver.** LLM-driven sessions have ~1–2 s gaps between MCP calls (model thinking time); scripted sessions have millisecond gaps. If benign sessions were mostly LLM-driven and attacks mostly scripted (or the reverse), timing alone would reveal the label. | Recorded. The session runner already stores the scenario name, and LLM sessions record model and seed in `notes`. | Rule for Parts 3–4: benign and attack sessions use the same mix of LLM-driven and scripted drivers, per protocol. Check the mix in 7.1. |
+| D13 | **Label leakage through the session driver and client.** LLM-driven sessions have ~1–2 s gaps between MCP calls (model thinking time); scripted sessions have millisecond gaps. The two MCP client handshakes also differ sharply on the wire (`auto`/`server/discover`: 31 packets for one call; `legacy`/`initialize`: 88). If benign and attack sessions used these in different proportions, timing or handshake alone would reveal the label. | Benign catalogue (3.1) declares its drivers (`DRIVERS`), handshake mix (`MCP_MODE_WEIGHTS`, 70% auto / 30% legacy) and timing profiles, and records them in each session's notes. | Rule for Part 4: attack sessions use the same driver mix per protocol, the same handshake mix and the same timing profiles. Check the mix in 7.1. |
 | D14 | **Per-leg protocol features in multi-service captures.** An A2A session capture holds both the A2A and the MCP leg; selecting HTTP requests "on a port" with tshark returned both legs and double-counted them. | Requests are selected by destination port (`http.request && tcp.dstport == <port>`) in the end-to-end check. | Rule for Part 6: extract protocol features per leg by destination address/port. |
 | D15 | **IP addresses and ports must not be model features.** Testbed hosts have fixed addresses, attacker hosts will use `127.77.9.0/24`, and the hardware testbed uses real network addresses. A model given raw addresses or ports would learn "this address = attack" or "this address range = software", not behaviour. | Recorded. | Rule for Part 6: no raw IPs or port numbers as features; use behavioural features instead (e.g. "destination never seen in benign traffic", number of distinct peers, direction). |
 | D8 | **Where capture hashes are stored.** The contract's manifest has no hash column, and its schema must not change without agreement. | **Resolved in 1.3:** a separate capture log `dataset/labels/capture_log.csv` (one row per session, valid or excluded) holds hash, packet/drop counts, scenario name, software versions and exclusion reasons. The manifest is unchanged. | Hardware side may use the same log format. |
@@ -680,3 +680,74 @@ Also verified: forged token → "Authentication failed"; anonymous weather reque
 - *Why a separate block (127.77.x.x) instead of 127.0.0.x?* Other local programs use `127.0.0.1`. A dedicated block lets one capture filter (`net 127.77.0.0/16`) take all testbed traffic and nothing else.
 - *Why will attackers have their own addresses?* On real networks an attacker's server is a different machine; "data sent to an unusual destination" is one of the taxonomy's indicators for exfiltration (AT-05).
 - *Then why must IP addresses not be features?* The model would memorise "addresses 127.77.9.x = attack" — true only in this testbed — and the hardware network uses different addresses altogether. Features must describe behaviour (e.g. a never-seen destination), not specific addresses (D15).
+
+---
+
+### 3.1 — Catalogue of benign scenarios
+
+**Goal:** define what normal (AT-00) traffic is — varied, realistic, reproducible — and in a way that does not hand the model shortcuts once attacks are added.
+
+**File:** `scripts/benign_scenarios.py` (catalogue, plan generators, executors, sample tool) · tests: `tests/test_benign_scenarios.py` (23 tests)
+
+**Three kinds of benign session**
+
+| Kind | Driver | What happens |
+|---|---|---|
+| `mcp-scripted` | scripted | A user's app calls 1–8 MCP tools in a realistic order for its role, with "interactive" (median ~1.2 s, max 6 s) or "automation" (0.02–0.3 s) pauses; 70% list tools first |
+| `mcp-llm` | LLM | The LLM agent completes one natural-language task over MCP (temperature 0.7, recorded seed) |
+| `a2a` | LLM (assistant) | A user sends 1–4 natural-language requests to the A2A Lab Assistant |
+
+**Reproducibility:** every session is generated from `(kind, seed)`; the plan (user, handshake, timing, calls or tasks, model seed) is identical for the same pair, and the summary including the seed is written to the manifest `notes`. Network timing and the model's wording still vary, as in reality.
+
+**Realism rules (and why)**
+
+| Rule | Why it matters for detection |
+|---|---|
+| All identities appear, weighted alice 3 : bob 2 : dana 1 : reporter-agent 2 : anonymous 1 | D12 — attacks must use the same identities, so identity is not a shortcut |
+| Admins legitimately read `finance/` and `secrets/` | Otherwise "a secret file was read" would by itself mean "attack" |
+| ~5% honest mistakes (wrong id, missing file, non-existent note, forbidden action for viewers/anonymous) | Otherwise "an error happened" would by itself mean "attack" |
+| Both MCP handshakes (70% `auto`, 30% `legacy`) | Real clients differ; the mix must match attacks (D13) |
+| Short polling sessions (~28% single-call, e.g. one sensor read) | Dashboards and monitors behave like this |
+| Arguments drawn from realistic pools (8 cities, topics, folders, note bodies of 0–7 sentences) | Payload sizes and contents vary |
+
+**Measured variety (2,000 scripted plans):** 93% of full plans (user, handshake, timing, calls) distinct, most frequent 0.35%; the most frequent call sequence alone (a single `dht22-lab` read) 3.55%; single-call sessions 28.4%; mistakes ≈ 5% of steps. The tests check these properties; the thresholds were set from this measurement, with the reasoning that what reaches the wire depends on the full plan, while frequent sensor polling is legitimate.
+
+**Real captured sample (`sample --per-kind 3`), all 9 valid:**
+
+| Kind | Packets | Duration |
+|---|---|---|
+| mcp-scripted | 31 – 88 | 0.4 – 1.6 s |
+| mcp-llm | 31 – 88 | 5.6 – 9.5 s |
+| a2a | 52 – 130 | 4.7 – 14.4 s |
+
+Every session differed (distinct packet counts in each kind) — compared with 1.4, where every session was identical (D10).
+
+**Findings**
+1. **Hidden correlation between kinds (fixed):** `mcp-llm` and `a2a` sessions built from the same seed number received the same user, task and model seed. In a collection run this would silently pair "independent" sessions. Each kind now has its own random stream (`random.Random(f"{kind}:{seed}")`); a regression test checks it.
+2. **Handshake difference:** the `legacy` handshake (`initialize` + `notifications/initialized`, plus an event stream) costs ~57 more packets than `auto` for the same call — a strong signal, hence the D13 extension.
+
+**Test results:** 301 tests pass, three consecutive runs. The catalogue's own 23 tests include a real captured run of four scripted sessions (legacy handshake, a mistake, a note reference, an admin secret read) in which the MCP audit log shows exactly the planned calls, and a real sample of every kind.
+
+**Mutation tests (6 of 6 caught):** mistakes far too frequent · viewers planning actuations · kinds sharing one random stream · non-admins planning secret reads · note references without a note · only one handshake.
+
+**Usage**
+```powershell
+python scripts/benign_scenarios.py plans --kind mcp-scripted --count 5
+python scripts/benign_scenarios.py sample --per-kind 3
+```
+
+**Security review**
+
+| Risk | Finding | Action |
+|---|---|---|
+| Benign sessions performing harmful actions | Scripted plans include actuation and deletes | Only for roles allowed to do them (tested over 2,000 plans); devices are simulated; deletes only touch the session's own note |
+| Planned calls the server would reject unintentionally | — | A test replays 400 plans against the server's own validation |
+| Real data in sessions | — | All arguments come from synthetic pools |
+| Label leakage via identities, handshakes, drivers, errors, secret reads | Each could become a shortcut | Benign side covers all of them; rules for Part 4 recorded (D12, D13) |
+
+**Viva notes**
+- *What is a scenario catalogue?* The definition of normal behaviour: which kinds of sessions exist, who performs them, which actions they contain and how they are timed.
+- *Why generate sessions from seeds?* Every session can be regenerated exactly from its kind and seed (recorded in the manifest), which makes the dataset reproducible and auditable.
+- *Why include mistakes and admin secret reads in benign traffic?* If benign traffic never contained errors or secret reads, a model would learn "error = attack" or "secret read = attack" — shortcuts that fail in reality.
+- *Why mix scripted and LLM-driven sessions?* Real deployments have both apps and AI agents; their timing differs, so both must appear in benign and attack traffic in the same proportions (D13).
+- *How was variety verified?* By measuring 2,000 plans (93% distinct) and by capturing real sessions (every packet count different), instead of assuming it.
