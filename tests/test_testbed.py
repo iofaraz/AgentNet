@@ -31,11 +31,14 @@ HTTP_SERVER = (
 
 
 def test_specs_match_the_server_scripts():
+    import re
     for spec in (t.MCP_SERVER, t.A2A_SERVER):
         source = (spec.directory / spec.script).read_text(encoding="utf-8")
-        assert f"port={spec.port}" in source, f"{spec.name}: port differs from {spec.script}"
-        assert 'host="127.0.0.1"' in source, f"{spec.name} must bind to 127.0.0.1 only"
+        assert re.search(rf"(port=|PORT = ){spec.port}\b", source), f"{spec.name}: port differs from {spec.script}"
+        hosts = re.findall(r'(?:host=|HOST = )"([^"]+)"', source)
+        assert hosts and set(hosts) == {"127.0.0.1"}, f"{spec.name} must bind to 127.0.0.1 only, found {hosts}"
     assert t.MCP_SERVER.bpf == "tcp port 8000" and t.A2A_SERVER.bpf == "tcp port 9999"
+    assert t.MCP_SERVER.audit and not t.A2A_SERVER.audit
 
 
 def test_start_ready_stop(tmp_path):

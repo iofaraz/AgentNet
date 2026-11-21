@@ -50,7 +50,27 @@ def test_end_to_end(e2e):
     rows, mreport = manifest.load(e2e.out_dir / "manifest.csv")
     assert mreport.ok and len(rows) == 2
     logs = sorted(p.name for p in (e2e.out_dir / "logs").iterdir())
-    assert len(logs) == 2 and all(p.endswith(("_mcp-server.log", "_a2a-server.log")) for p in logs)
+    assert len(logs) == 3, logs
+    assert sum(p.endswith("_mcp-server.log") for p in logs) == 1
+    assert sum(p.endswith("_a2a-server.log") for p in logs) == 1
+    assert sum(p.endswith("_mcp-server_audit.jsonl") for p in logs) == 1
+
+
+def test_audit_entries_match_the_session_window(e2e):
+    # Attack scenarios will decide success from the audit log, selecting a
+    # session's entries by its manifest time window (no IDs on the wire).
+    import sys
+    from datetime import datetime
+    sys.path.insert(0, str(testbed.TESTBED / "mcp"))
+    import audit
+    rows = {r["session_id"]: r for r in manifest.load(e2e.out_dir / "manifest.csv")[0]}
+    mcp = rows["MCP-S-B0001"]
+    log = next((e2e.out_dir / "logs").glob("*_mcp-server_audit.jsonl"))
+    entries = audit.read(log)
+    window = audit.between(entries, datetime.fromisoformat(mcp["start_time"]), datetime.fromisoformat(mcp["end_time"]))
+    assert [e["tool"] for e in window] == ["calculate", "get_weather", "list_files", "read_file", "read_sensor"]
+    assert {(e["principal"], e["role"], e["decision"]) for e in window} == {("alice", "viewer", "allowed")}
+    assert window == entries, "the only MCP session's calls all fall inside its window"
     assert not testbed.port_in_use(testbed.MCP_SERVER.port), "servers must be stopped afterwards"
     assert not capture._running
 

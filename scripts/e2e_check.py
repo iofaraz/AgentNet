@@ -35,8 +35,13 @@ import manifest
 import runner
 import testbed
 
-MCP_EXPECTED_TOOLS = ["calculate_sum", "get_system_info", "get_weather"]
-MCP_EXPECTED_METHODS = ["server/discover", "tools/list", "tools/call", "tools/call", "tools/call"]
+MCP_EXPECTED_TOOLS = sorted([
+    "calculate", "get_weather", "get_server_status",
+    "list_files", "read_file", "search_files",
+    "create_note", "list_notes", "get_note", "delete_note",
+    "list_devices", "read_sensor", "set_led", "sound_buzzer",
+])
+MCP_EXPECTED_METHODS = ["server/discover", "tools/list"] + ["tools/call"] * 5
 A2A_AGENT_CARD_PATH = "/.well-known/agent-card.json"
 A2A_EXPECTED_METHODS = {"SendMessage": 10}
 
@@ -50,6 +55,10 @@ class ScenarioCheckError(RuntimeError):
 # --------------------------------------------------------------------------
 
 def _load(path: Path, name: str):
+    """Import a testbed client by file path (its folder holds its sibling modules)."""
+    folder = str(path.parent)
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -64,13 +73,22 @@ def mcp_basic_tools() -> runner.Scenario:
         tools = sorted(name for name, _ in r["tools"])
         if tools != MCP_EXPECTED_TOOLS:
             raise ScenarioCheckError(f"unexpected tool list {tools}")
-        if r["calculate_sum"] != {"result": 30.0}:
-            raise ScenarioCheckError(f"calculate_sum(10, 20) returned {r['calculate_sum']}")
-        if "Islamabad" not in r["get_weather"]:
-            raise ScenarioCheckError("get_weather answer does not mention the requested city")
-        if "Operating System:" not in r["get_system_info"]:
-            raise ScenarioCheckError("get_system_info answer is malformed")
-        return runner.Outcome(notes="3 tools listed; 3 tool calls answered correctly")
+        if r["errors"]:
+            raise ScenarioCheckError(f"tool errors: {r['errors']}")
+        if r["calculate"] != 30.0:
+            raise ScenarioCheckError(f"calculate(10, 20, add) returned {r['calculate']}")
+        if r["get_weather"].get("city") != "Islamabad":
+            raise ScenarioCheckError("get_weather answer is for the wrong city")
+        paths = [f["path"] for f in r["list_files"]]
+        if "public/faq.md" not in paths:
+            raise ScenarioCheckError("list_files did not include public/faq.md")
+        if any(p.startswith(("finance/", "secrets/")) for p in paths):
+            raise ScenarioCheckError("a viewer could see admin-only files")
+        if "AgentNet Lab FAQ" not in r["read_file"]:
+            raise ScenarioCheckError("read_file returned the wrong content")
+        if "temperature_c" not in r["read_sensor"]:
+            raise ScenarioCheckError("read_sensor answer is malformed")
+        return runner.Outcome(notes="14 tools listed; 5 tool calls answered correctly as a viewer")
 
     spec = testbed.MCP_SERVER
     return runner.Scenario(

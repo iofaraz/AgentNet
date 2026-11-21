@@ -49,6 +49,7 @@ class ServerSpec:
     script: str            # file to run with the project's Python
     port: int
     ready_url: str | None  # HTTP URL that must answer 200 before the server counts as ready
+    audit: bool = False    # server writes an audit log (path passed in AGENTNET_AUDIT_LOG)
 
     @property
     def bpf(self) -> str:
@@ -56,7 +57,7 @@ class ServerSpec:
         return f"tcp port {self.port}"
 
 
-MCP_SERVER = ServerSpec("mcp-server", TESTBED / "mcp", "server.py", 8000, None)
+MCP_SERVER = ServerSpec("mcp-server", TESTBED / "mcp", "server.py", 8000, None, audit=True)
 A2A_SERVER = ServerSpec(
     "a2a-server", TESTBED / "a2a", "server.py", 9999,
     f"http://{HOST}:9999/.well-known/agent-card.json",
@@ -75,6 +76,8 @@ class Server:
     def __init__(self, spec: ServerSpec, log_path: Path) -> None:
         self.spec = spec
         self.log_path = Path(log_path)
+        # <run>_<server>.log -> <run>_<server>_audit.jsonl, next to the server log
+        self.audit_path = self.log_path.with_name(self.log_path.stem + "_audit.jsonl") if spec.audit else None
         self._proc: subprocess.Popen | None = None
         self._log = None
 
@@ -88,11 +91,16 @@ class Server:
                 f"before starting {spec.name}"
             )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.audit_path and self.audit_path.exists():
+            raise TestbedError(f"{self.audit_path} already exists; logs are never overwritten")
         try:
             self._log = open(self.log_path, "x", encoding="utf-8")  # never overwrite a log
         except FileExistsError:
             raise TestbedError(f"{self.log_path} already exists; logs are never overwritten") from None
         env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+        env.pop("AGENTNET_AUDIT_LOG", None)
+        if self.audit_path:
+            env["AGENTNET_AUDIT_LOG"] = str(self.audit_path)
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         self._proc = subprocess.Popen(
             [sys.executable, spec.script],

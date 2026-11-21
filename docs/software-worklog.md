@@ -21,8 +21,8 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 | | 1.2 Automated capture (dumpcap) | 5–7 | ✅ Done |
 | | 1.3 Session runner (capture → run → stop → log) | 5–7 | ✅ Done |
 | | 1.4 End-to-end test with the existing agents | 5–7 | ✅ Done |
-| **2. Realistic testbed** | 2.1 Richer MCP server (files, synthetic secrets, mock device) | 5 | ⏳ Next |
-| | 2.2 LLM-driven MCP agent (Ollama) | 5 | Pending |
+| **2. Realistic testbed** | 2.1 Richer MCP server (files, synthetic secrets, mock device) | 5 | ✅ Done |
+| | 2.2 LLM-driven MCP agent (Ollama) | 5 | ⏳ Next |
 | | 2.3 LLM-driven A2A agents | 5 | Pending |
 | | 2.4 Separate hosts so attacker traffic has its own address | 5 | Pending |
 | **3. Benign traffic** | 3.1 Catalogue of benign scenarios with variability | 5 | Pending |
@@ -54,7 +54,9 @@ Items that need a decision from both team members, or that affect the hardware s
 | D5 | **Timezone convention.** Contract asks for one convention but does not name it. | ISO 8601 local time with UTC offset and milliseconds, e.g. `2026-11-21T15:46:00.123+05:00`. Validator rejects a manifest that mixes offset and no-offset times. | Hardware side to use the same format. |
 | D6 | **Phase 2–3 captures and sample manifest.** `traffic/samples/mcp_benign_manifest.csv` has no header row and an older column layout, and its PCAPs are not on the software machine (captures are git-ignored). | Left unchanged. Not migrated to the new manifest because its timestamps are unknown and labels must not be guessed (taxonomy §6, rule 6). | Hardware side holds the original PCAPs if they are needed. |
 | D7 | **Capture backup.** `.gitignore` excludes `*.pcapng`, `traffic/pcaps/*`, `dataset/raw/*` and `dataset/processed/*`, so pushing does **not** back up captures or processed data. | Noted. To be solved before the first collection run (subpart 3.2). Captures are made read-only with a SHA-256 hash (1.2), so a backup copy can be verified. | Choose a backup location for captures (e.g. shared drive or GitHub release assets). |
-| D9 | **Real host details in captures.** The demo MCP tool `get_system_info` returns the real OS, Python version and CPU type, so every MCP capture contains them. Privacy issue if the dataset is shared, and an environment-specific signal (software and hardware hosts answer differently) that a model could use to tell environments apart instead of learning behaviour. | Not changed in 1.4 (changing testbed tools is subpart 2.1). | Replace with synthetic, environment-neutral answers in 2.1. |
+| D9 | **Real host details in captures.** The demo MCP tool `get_system_info` returned the real OS, Python version and CPU type, so every MCP capture contained them. Privacy issue if the dataset is shared, and an environment-specific signal a model could use to tell environments apart. | **Resolved in 2.1:** tool removed; replaced by `get_server_status` (synthetic, environment-neutral). Tests fail if any tool output contains the host's OS, CPU, Python version, host name or user name, or if server code queries the host. | — |
+| D11 | **Tool names shared with the hardware side.** Software-to-hardware evaluation compares the same behaviour in two environments; if the ESP32 MCP server names or shapes its sensor/actuator tools differently, the two datasets differ for reasons unrelated to the environment. | Software uses `list_devices`, `read_sensor(sensor_id)`, `set_led(device_id, on, color)`, `sound_buzzer(device_id, duration_ms)` with DHT22/BME280 sensor types. | Hardware side to confirm or share its tool names and argument shapes; align before collection (3.2). |
+| D12 | **Label leakage through identities.** Bearer tokens travel in plaintext HTTP and appear in captures. If attack sessions used identities that benign sessions never use (e.g. an "attacker" user), a model could detect attacks from the token alone. | Tokens are opaque (no user names inside) and synthetic. | Rule for Part 4: attack sessions use the same identities as benign sessions (e.g. a compromised `bob`). Rule for Part 6: tokens and identities are not model features. |
 | D10 | **Demo agents produce identical sessions.** In 1.4, every MCP session was 47 packets / 10,304 bytes and every A2A session 100 packets / 17,188 bytes. A dataset of such sessions would let a model memorise sizes instead of learning behaviour. | Evidence recorded; the demo sessions are not added to the dataset manifest. | Variability is the goal of Part 2 and subpart 3.1. |
 | D8 | **Where capture hashes are stored.** The contract's manifest has no hash column, and its schema must not change without agreement. | **Resolved in 1.3:** a separate capture log `dataset/labels/capture_log.csv` (one row per session, valid or excluded) holds hash, packet/drop counts, scenario name, software versions and exclusion reasons. The manifest is unchanged. | Hardware side may use the same log format. |
 
@@ -372,3 +374,84 @@ python scripts/e2e_check.py --sessions 2
 - *Why read captures back with a different tool (tshark) than the one that wrote them (dumpcap)?* An independent check: the packet count and the protocol messages are confirmed by a second program, not by trusting the writer.
 - *What is data leakage, with an example from this project?* A signal that reveals the label without being real attack behaviour — e.g. a 1-second idle tail present only in benign sessions, or host details that differ only between environments.
 - *Why are identical sessions a problem?* A model can memorise exact packet counts and sizes instead of learning behaviour, giving perfect accuracy on the dataset and failing on anything new.
+
+---
+
+### 2.1 — Richer MCP server
+
+**Goal:** replace the three demonstration tools with a realistic, varied MCP server that every later attack can target, with ground truth for attack outcomes, and without revealing the host (D9).
+
+**Files**
+
+| File | Purpose |
+|---|---|
+| `software_testbed/mcp/workspace.py` | The synthetic world: users/roles/tokens, virtual files, notes, sensors, actuators, all permission rules |
+| `software_testbed/mcp/audit.py` | Append-only JSON-lines audit log; `between()` selects a session's entries by time |
+| `software_testbed/mcp/server.py` | Rewritten: 14 tools, bearer-token identity, error masking, audit of every call |
+| `software_testbed/mcp/client.py` | Authenticates as a synthetic user; exercises 5 tools as a viewer |
+| `scripts/testbed.py` | Passes each run's audit-log path to the MCP server (never overwritten) |
+| `scripts/e2e_check.py` | Expects the new tool set and checks a viewer cannot see admin-only files |
+| `tests/test_mcp_server.py` | 64 tests (plus 1 new end-to-end test for audit time windows) |
+
+**Tools (14)**
+
+| Group | Tools | Minimum role | Prepares for |
+|---|---|---|---|
+| Utility | `calculate`, `get_weather`, `get_server_status` | anonymous | benign variety; replaces `get_system_info` (D9) |
+| Files | `list_files`, `read_file`, `search_files` | viewer; `finance/` and `secrets/` admin only | AT-03 (content returned by tools), AT-04 (confused deputy), AT-05 (synthetic canary secrets) |
+| Notes | `create_note`, `list_notes`, `get_note`, `delete_note` | viewer, own notes only | stateful, varied traffic |
+| Sensors | `list_devices`, `read_sensor` | viewer | mirrors the hardware side's DHT22/BME280 (D11) |
+| Actuators | `set_led`, `sound_buzzer` | operator | AT-07 (unauthorized physical actuation), simulated and harmless |
+
+Synthetic users: `alice` (viewer), `bob` (operator), `dana` (admin), `reporter-agent` (viewer), `ops-agent` (admin). Callers send `Authorization: Bearer <token>`; no header means anonymous; an unknown token is rejected (never downgraded to anonymous).
+
+**Design decisions**
+
+| Decision | Reason |
+|---|---|
+| Virtual in-memory workspace | The server never touches the real disk, so experiments cannot damage or read the host; path traversal is impossible by construction (the path rule is kept as defence in depth) |
+| Synthetic canary secrets (`AGENTNET-CANARY-…`) in admin-only files | Contract §2 requires synthetic data; a canary found outside the server proves exactly what was exfiltrated (AT-05) |
+| Audit log as attack ground truth | Taxonomy §5: outcomes validated against application logs. Entries are matched to sessions **by time**, because sending a session ID in a header would put the label into the captured traffic |
+| Opaque bearer tokens | Realistic (as real MCP deployments authenticate), and no user names on the wire (D12) |
+| Tool descriptions in one table | Tool poisoning (AT-01) and rug pulls (AT-02) change descriptions/tools; one place to swap them |
+| Tool annotations (`read_only_hint`, `destructive_hint`) | MCP's way of telling agents which tools change state; realistic metadata that later attacks may lie about |
+| Internal errors masked | Clients see "internal server error"; the real cause goes only to the audit log |
+| Size limits everywhere | Note length/count, search hits, query/city/path length, buzzer duration — no request can exhaust memory |
+| Response types `dict[str, Any]` | Measured: a bare `dict` return type is sent as text only; typed returns give structured output for every tool |
+| Sensor values and weather vary with time | Responses differ between sessions (D10) |
+
+**SDK findings (MCP 2.3.0)**
+- `from __future__ import annotations` breaks schema generation for tools defined inside a function (type hints become unresolvable strings) — not used in `server.py`.
+- Tools returning bare `dict` get no structured output; `dict[str, Any]` does.
+- `Client` can use a custom HTTP client (`streamable_http_client(url, http_client=...)`) — used for the `Authorization` header — and has a `mode` option (`"legacy"` uses the older `initialize` handshake), a possible source of client variety in 3.1.
+
+**Verification**
+- End-to-end check (1.4) with the new server: 4 of 4 sessions valid; MCP sessions now 63 packets (`server/discover`, `tools/list`, 5 × `tools/call`); the audit log recorded exactly the 10 calls as `alice / viewer / allowed`, and a test confirms each session's audit entries are found by its manifest time window.
+- Manual `python client.py` run against the real server works.
+
+**Test results:** 197 tests pass (54 manifest + 29 capture + 33 runner + 9 testbed + 8 end-to-end + 64 MCP server), three consecutive runs.
+
+**Mutation tests (7 of 7 caught):** restricted files visible to everyone · viewers may actuate devices · `..` path rule removed · forged token downgraded to anonymous · internal errors leaked to the client · host information back in the status tool · anonymous caller gets the admin file list. The `..` mutation first survived because the virtual file system rejected the path anyway ("no such file"); the test now requires the path rule itself to fire.
+
+**Security review**
+
+| Risk | Finding | Action |
+|---|---|---|
+| Path traversal / host file access | — | Virtual workspace (no real files) + path rule; tested with `../`, absolute, backslash and null-byte paths |
+| Privilege escalation | — | Role checks in one place (`World`); viewers cannot read restricted files or actuate; tested for every non-admin user |
+| Forged credentials | A failed lookup could silently become anonymous access | Unknown tokens and wrong schemes are rejected outright |
+| Information disclosure through errors | Exception text could reveal internals | Generic message to the client; detail only in the audit log |
+| Host information in captures (D9) | Old tool sent real OS/CPU/Python | Removed; tests guard both output and source code |
+| Resource exhaustion | Unbounded notes or searches | Limits on every input and on stored notes |
+| Real secrets in the dataset | — | Only synthetic canaries; no real credentials anywhere (checked) |
+| Label leakage via identities (D12) | Tokens are visible in plaintext captures | Opaque tokens; rules recorded for Parts 4 and 6 |
+| Network exposure | — | Binds to `127.0.0.1` (test enforces it) |
+
+**Viva notes**
+- *Why a synthetic workspace instead of real files?* Attacks are run against it on purpose; it must be impossible for an experiment to touch real data, and every secret must be fake (contract §2).
+- *What is a canary token?* A unique fake secret. If it ever appears somewhere it should not — e.g. at an attacker's server — that proves the data was exfiltrated, and exactly which data.
+- *What is role-based access control (RBAC)?* Permissions attached to roles (viewer, operator, admin) instead of to individual users; the server checks the caller's role before every sensitive action.
+- *How does the server know who is calling?* From the `Authorization: Bearer <token>` HTTP header, as real APIs do. Unknown tokens are rejected, not treated as anonymous.
+- *How will you prove an attack succeeded?* From the audit log: for example, a `read_file` of `secrets/api_keys.txt` allowed for a principal who should not have obtained it, or a `set_led` by a caller who was not authorised to request it — selected by the session's time window.
+- *Why not put the session ID in a header to make matching easier?* Headers are in the captured traffic; an ID like `MCP-S-AT01-0001` would hand the label to the model (data leakage).
+- *What are MCP tool annotations?* Hints such as "read-only" or "destructive" that tell an agent how risky a tool is. They are metadata the server controls — which is exactly what a malicious server can lie about.
