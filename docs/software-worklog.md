@@ -18,8 +18,8 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 | **0. Setup** | 0.1 Tools, libraries and environment | — | ✅ Done |
 | **1. Foundation** | 1.1 Manifest schema and validator | 5–7 | ✅ Done |
 | | 1.1b Session ID format with environment letter | 5–7 | ✅ Done |
-| | 1.2 Automated TShark capture | 5–7 | ⏳ Next |
-| | 1.3 Session runner (capture → run → stop → log) | 5–7 | Pending |
+| | 1.2 Automated capture (dumpcap) | 5–7 | ✅ Done |
+| | 1.3 Session runner (capture → run → stop → log) | 5–7 | ⏳ Next |
 | | 1.4 End-to-end test with the existing agents | 5–7 | Pending |
 | **2. Realistic testbed** | 2.1 Richer MCP server (files, synthetic secrets, mock device) | 5 | Pending |
 | | 2.2 LLM-driven MCP agent (Ollama) | 5 | Pending |
@@ -53,7 +53,8 @@ Items that need a decision from both team members, or that affect the hardware s
 | D4 | **Transport values.** Contract shows only `HTTP`; taxonomy says "HTTP or HTTPS/TLS". | Allowed values: `HTTP`, `HTTPS`. | Confirm. |
 | D5 | **Timezone convention.** Contract asks for one convention but does not name it. | ISO 8601 local time with UTC offset and milliseconds, e.g. `2026-11-21T15:46:00.123+05:00`. Validator rejects a manifest that mixes offset and no-offset times. | Hardware side to use the same format. |
 | D6 | **Phase 2–3 captures and sample manifest.** `traffic/samples/mcp_benign_manifest.csv` has no header row and an older column layout, and its PCAPs are not on the software machine (captures are git-ignored). | Left unchanged. Not migrated to the new manifest because its timestamps are unknown and labels must not be guessed (taxonomy §6, rule 6). | Hardware side holds the original PCAPs if they are needed. |
-| D7 | **Capture backup.** `.gitignore` excludes `*.pcapng`, `traffic/pcaps/*`, `dataset/raw/*` and `dataset/processed/*`, so pushing does **not** back up captures or processed data. | Noted. To be solved before the first collection run (subpart 3.2). | Choose a backup location for captures (e.g. shared drive or GitHub release assets). |
+| D7 | **Capture backup.** `.gitignore` excludes `*.pcapng`, `traffic/pcaps/*`, `dataset/raw/*` and `dataset/processed/*`, so pushing does **not** back up captures or processed data. | Noted. To be solved before the first collection run (subpart 3.2). Captures are made read-only with a SHA-256 hash (1.2), so a backup copy can be verified. | Choose a backup location for captures (e.g. shared drive or GitHub release assets). |
+| D8 | **Where capture hashes are stored.** The contract's manifest has no hash column, and its schema must not change without agreement. | `CaptureResult.sha256` is computed for every capture; where it is recorded is decided in 1.3. | — |
 
 ---
 
@@ -168,3 +169,74 @@ python -m pytest tests/
 - *Why 4 digits?* Roughly 2,500 benign sessions are planned; 3 digits stop at 999.
 - *Why not just rely on the `environment` column?* The contract requires IDs that are never reused. A key that is only unique together with another column is easy to break when files are merged or filtered.
 - *Why does the validator check the letter against the column?* Two places now hold the same fact; if they disagree one of them is wrong, and the validator refuses to guess which.
+
+---
+
+### 1.2 — Automated capture (dumpcap)
+
+**Goal:** record sessions from code — reliably enough that thousands of captures can be trusted without opening each one in Wireshark.
+
+**Files**
+
+| File | Purpose |
+|---|---|
+| `scripts/capture.py` | `Capture` class (start/stop/verify), interface discovery, command-line tool |
+| `tests/test_capture.py` | 29 tests, most making real loopback captures with a throw-away local HTTP server |
+
+**How it works**
+1. Checks the file name against the contract (§5), refuses paths and refuses to overwrite an existing capture.
+2. Starts Wireshark's `dumpcap` on the loopback interface with a **mandatory** capture filter.
+3. Waits until dumpcap prints `File: …` — only then does the session run.
+4. After the session, keeps recording for a 1-second grace period, then stops dumpcap gracefully (Ctrl+Break on Windows, SIGINT on Linux).
+5. Reads dumpcap's own packet and drop counts, makes the file read-only and computes its SHA-256 hash.
+6. Returns a `CaptureResult` (path, start/stop timestamps in manifest format, packets, drops, hash); `ok` is false for empty captures or any dropped packet.
+
+**Design decisions**
+
+| Decision | Reason |
+|---|---|
+| `dumpcap` instead of `tshark` | dumpcap is the capture engine Wireshark itself uses; it only writes packets (no decoding), so it is lighter and less likely to drop packets |
+| Capture filter is required | The loopback interface also carries Ollama (port 11434), editors and Docker traffic; recording everything would mix unrelated packets into the dataset and could record private data |
+| Ready = `File:` line, not `Capturing on` | Measured: dumpcap prints `Capturing on` **before** checking the filter. With an invalid filter it prints that line and then exits. Waiting for `Capturing on` would let a session run with no recording. Found by a failing test, then confirmed by hand with three invalid filters |
+| 1-second grace period | Measured: catches every closing FIN of every connection |
+| Graceful stop | A hard kill can leave the last packets unwritten; mutation test showed 7 tests fail when graceful stop is replaced by kill |
+| Read-only + SHA-256 | Contract §5: keep original PCAPs unchanged; the hash proves later that a file was not altered |
+| Session errors keep the capture | Failed experiments are recorded, not dropped (contract §9); dumpcap is still always stopped |
+| Read stderr on a background thread | dumpcap writes progress continuously; an unread pipe fills up and freezes the capture |
+
+**Measurements on this machine:** dumpcap ready in ≈0.26 s; a 5-request test captured 65 packets with 0 dropped, the first packet being the opening SYN, 5 SYNs and 10 FINs (complete connections).
+
+**Real-world check:** recorded the existing MCP client/server session (outside `traffic/pcaps`): 47 packets, 0 dropped, and the full JSON-RPC exchange was present — `server/discover`, `tools/list`, three `tools/call` (calculate_sum, get_weather, get_system_info), each with its response.
+
+> **Finding for Part 6:** MCP SDK 2.3.0 opens a session with `server/discover`, not the `initialize` handshake of earlier MCP versions. Protocol-feature extraction must use the methods actually observed, not those assumed from older documentation. Also, this TShark version returns HTTP bodies (`http.file_data`) as hex, which must be decoded.
+
+**Test results:** 83 tests pass (54 manifest + 29 capture), three consecutive runs, no dumpcap process left behind.
+
+**Mutation tests (4 of 4 caught):** ready on `Capturing on` → 3 fail · no read-only → 1 fails · hard kill instead of graceful stop → 7 fail · stop errors swallowed → 1 fails (this mutation initially survived; two tests were added to cover it).
+
+**Usage**
+```powershell
+python scripts/capture.py interfaces
+python scripts/capture.py record mcp_benign_software_001.pcapng --filter "tcp port 8000" --seconds 10
+```
+
+**Security review**
+
+| Risk | Finding | Action |
+|---|---|---|
+| Command injection through filter or interface text | — | dumpcap is started with an argument list, never through a shell; no `shell=True`, `os.system` or `eval` in the code |
+| Path traversal / overwriting captures | — | Bare contract file names only; existing files refused; finished files read-only |
+| Recording unrelated or private local traffic | Loopback carries other applications' traffic | Capture filter mandatory; test proves traffic on another port is excluded |
+| Orphaned capture processes | A crash could leave dumpcap recording forever | Always stopped on exit from the `with` block, plus an exit handler that kills leftovers |
+| Captures pushed to GitHub | Captures contain full plaintext payloads | `traffic/pcaps/*` and `*.pcapng` are git-ignored (verified) |
+| Frozen capture (pipe deadlock) | — | stderr read continuously on a background thread |
+| Npcap configuration | `AdminOnly = 0`: any program running as this user can capture loopback traffic | Recorded, not changed — this is what allows capture without administrator rights; acceptable on a single-user laptop |
+
+**Viva notes**
+- *What is a capture filter (BPF)?* A rule given to the capture driver, e.g. `tcp port 8000`, so only matching packets are recorded. It works in the kernel before packets reach the program, which is efficient.
+- *Capture filter vs. display filter?* A capture filter decides what is recorded (cannot be undone); a display filter (Wireshark's `http.request`) only hides packets in an existing recording.
+- *Why do dropped packets matter?* A capture with missing packets has wrong packet counts, sizes and timings — the very features the IDS learns from. Every capture's drop count is checked.
+- *What is the loopback interface?* The virtual network inside one computer (`127.0.0.1`). The software testbed's agents talk over it; Npcap's loopback adapter makes it capturable on Windows.
+- *What is a SYN / FIN?* The TCP packets that open and close a connection. Seeing the first SYN and every FIN proves a recording is complete from start to end.
+- *Why a SHA-256 hash?* A fingerprint of the file; if even one byte changes, the hash changes. It proves the dataset was built from unmodified captures.
+- *How was the ready-signal bug found?* A test with an invalid filter failed; reproducing it by hand showed dumpcap prints "Capturing on" before validating the filter. Tests exist to find exactly this kind of hidden assumption.
