@@ -1,0 +1,2 @@
+run_id,environment,reason,decided_on
+S-BENIGN-01,Software,"Pilot: catalogue without multi-step tasks and llama3.2:3b; the agent made one tool call in 73 of 75 LLM sessions (D16)",2026-11-23

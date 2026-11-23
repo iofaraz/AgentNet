@@ -56,6 +56,7 @@ These rules were agreed by both team members on 2026-11-23. The full standard is
 6. Never mark an attack `Success` by assumption. Check it against logs or the device state (e.g. the LED actually turned on).
 7. If a label is unclear, discuss it. **Never guess a label.**
 8. Never edit original PCAPs. Processed data goes in `dataset/processed/`.
+9. If a whole run must be left out of the final dataset (e.g. a pilot made with an older setup), list its `run_id` with the reason in `dataset/labels/excluded_runs.csv`. Keep its captures and records; never delete them.
 
 ### 3. Hardware testbed design (agreed)
 

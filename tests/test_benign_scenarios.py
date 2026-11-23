@@ -191,6 +191,19 @@ def test_task_mistake_rate():
     assert 0.02 < rate < 0.09, rate
 
 
+def test_chain_tasks_are_about_forty_percent_and_recorded():
+    tasks = [t for p in TASKS for t in p.tasks]
+    chained = sum(p.chain_tasks for p in TASKS)
+    assert 0.30 < chained / len(tasks) < 0.50, chained / len(tasks)
+    assert all(f"chain_tasks={p.chain_tasks}" in p.summary() for p in TASKS[:50])
+    assert all(0 <= p.chain_tasks <= len(p.tasks) for p in TASKS)
+
+
+def test_every_role_gets_chain_tasks():
+    for role in ("anonymous", "viewer", "operator", "admin"):
+        assert any(t in B.CHAIN_TASKS for t in B.tasks_for(role)), role
+
+
 def test_llm_seeds_differ_between_sessions():
     seeds = [p.llm_seed for p in TASKS]
     assert len(set(seeds)) == len(seeds)

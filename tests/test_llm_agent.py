@@ -317,7 +317,7 @@ def test_real_model_reads_a_sensor_and_is_captured(tmp_path):
     assert res.valid, res.reason
     r = trace["r"]
     assert r.finished and any(ch.isdigit() for ch in r.answer)
-    assert "llm=llama3.2:3b" in res.manifest_row["notes"]
+    assert f"llm={G.DEFAULT_MODEL}" in res.manifest_row["notes"]
     entries = A.read(audit_path)
     assert any(e["tool"] == "read_sensor" and e["principal"] == "alice" and e["decision"] == "allowed" for e in entries)
     assert manifest.load(tmp_path / "m.csv")[1].ok

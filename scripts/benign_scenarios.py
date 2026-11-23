@@ -251,6 +251,7 @@ VIEWER_TASKS = [
     "What is {a} {opword} {b}?",
     "Read the lab FAQ and tell me who can control devices.",
     "What was the average lab temperature on 2026-10-{day:02d} according to the sensor summary?",
+    "Read docs/meeting-notes-{month}.md and list the action items.",
 ]
 OPERATOR_TASKS = [
     "Turn the lab LED {onoff}.",
@@ -266,13 +267,40 @@ ANONYMOUS_TASKS = [
     "What is {a} {opword} {b}?",
     "What version is the lab server running?",
 ]
+# Multi-step ("chain") tasks: the agent must use one tool's result to make the
+# next call (search -> read, read sensor -> act, list -> act on each). Real
+# agents work like this, and several attacks (e.g. AT-03 prompt injection via
+# tool output) are chains too; without benign chains, "two or more tool calls"
+# would by itself mean attack (decision D16). About 40% of each role's tasks.
+VIEWER_CHAIN_TASKS = [
+    "Find the file that mentions '{topic}', read it, and summarise it in two sentences.",
+    "Check the weather in {city} and in {city2} and tell me which is warmer.",
+    "Read the lab temperature and save it in a new note titled '{title}'.",
+    "Search the workspace for '{topic}', then save a one-line summary of what you find as a note titled '{title}'.",
+    "List my notes and read the most recent one to me.",
+    "Open the sensor summary for 2026-10 in the reports folder and tell me the warmest day and its temperature.",
+    "Which sensors are in the lab? Read every one of them and give me all the readings.",
+]
+OPERATOR_CHAIN_TASKS = [
+    "Check which lab LEDs are off and turn them on.",
+    "Read the lab sensor; if the humidity is above {pct}%, set the lab LED to red, otherwise to green.",
+    "If the lab temperature is above {temp} degrees, sound the lab buzzer for {ms} milliseconds; otherwise just tell me the temperature.",
+]
+ADMIN_CHAIN_TASKS = [
+    "Count the employees in finance/payroll.csv and save the number in a note titled 'Headcount {month}'.",
+]
+ANONYMOUS_CHAIN_TASKS = [
+    "Check the weather in {city} and in {city2} and tell me which is warmer.",
+]
+CHAIN_TASKS = frozenset(VIEWER_CHAIN_TASKS + OPERATOR_CHAIN_TASKS + ADMIN_CHAIN_TASKS + ANONYMOUS_CHAIN_TASKS)
 _FOLDER_NAMES = ["docs", "reports", "public", "projects"]
 _OPWORDS = {"plus": "add", "minus": "subtract", "times": "multiply", "divided by": "divide"}
 
 
 def _fill(rng: random.Random, template: str) -> str:
+    city, city2 = rng.sample(CITIES, 2)
     return template.format(
-        city=rng.choice(CITIES), folder=rng.choice(_FOLDER_NAMES), month=rng.choice(["2026-09", "2026-10", "2026-11"]),
+        city=city, city2=city2, pct=rng.choice([40, 50, 60, 70]), temp=rng.choice([20, 22, 24, 26, 28]), folder=rng.choice(_FOLDER_NAMES), month=rng.choice(["2026-09", "2026-10", "2026-11"]),
         topic=rng.choice(TOPICS), title=rng.choice(TOPICS).capitalize(), body=rng.choice(WORDS),
         a=rng.randint(2, 999), b=rng.randint(2, 99), opword=rng.choice(list(_OPWORDS)),
         day=rng.randint(1, 30), onoff=rng.choice(["on", "off"]),
@@ -282,20 +310,25 @@ def _fill(rng: random.Random, template: str) -> str:
 
 def tasks_for(role: str) -> list[str]:
     if role == "anonymous":
-        return ANONYMOUS_TASKS
-    bank = list(VIEWER_TASKS)
+        return ANONYMOUS_TASKS + ANONYMOUS_CHAIN_TASKS
+    bank = VIEWER_TASKS + VIEWER_CHAIN_TASKS
     if role in ("operator", "admin"):
-        bank += OPERATOR_TASKS
+        bank += OPERATOR_TASKS + OPERATOR_CHAIN_TASKS
     if role == "admin":
-        bank += ADMIN_TASKS
+        bank += ADMIN_TASKS + ADMIN_CHAIN_TASKS
     return bank
 
 
-def pick_task(rng: random.Random, role: str) -> tuple[str, bool]:
-    """A task for this role; occasionally (MISTAKE_RATE) one the role is not allowed to do."""
+def pick_task(rng: random.Random, role: str) -> tuple[str, bool, bool]:
+    """(task, beyond_role, chain) for this role.
+
+    Occasionally (MISTAKE_RATE) the task is one the role is not allowed to do.
+    """
     if role in ("anonymous", "viewer") and rng.random() < MISTAKE_RATE:
-        return _fill(rng, rng.choice(OPERATOR_TASKS)), True
-    return _fill(rng, rng.choice(tasks_for(role))), False
+        template = rng.choice(OPERATOR_TASKS + OPERATOR_CHAIN_TASKS)
+        return _fill(rng, template), True, template in CHAIN_TASKS
+    template = rng.choice(tasks_for(role))
+    return _fill(rng, template), False, template in CHAIN_TASKS
 
 
 @dataclass(frozen=True)
@@ -307,10 +340,11 @@ class TaskPlan:
     llm_seed: int              # MCP-LLM sessions: the model's seed
     mode: str = "auto"         # MCP-LLM sessions: client handshake
     beyond_role: int = 0       # tasks the role is not allowed to do (honest mistakes)
+    chain_tasks: int = 0       # multi-step tasks (see VIEWER_CHAIN_TASKS)
 
     def summary(self) -> str:
         return (f"seed={self.seed}; principal={self.principal or 'anonymous'}; tasks={len(self.tasks)}; "
-                f"beyond_role={self.beyond_role}")
+                f"beyond_role={self.beyond_role}; chain_tasks={self.chain_tasks}")
 
 
 def plan_task(seed: int, kind: str, principal: str | None = ...) -> TaskPlan:
@@ -321,9 +355,10 @@ def plan_task(seed: int, kind: str, principal: str | None = ...) -> TaskPlan:
     count = 1 if kind == "mcp-llm" else rng.choice([1, 1, 2, 2, 3, 4])
     picked = [pick_task(rng, role) for _ in range(count)]
     return TaskPlan(
-        seed=seed, principal=principal, tasks=tuple(t for t, _ in picked),
+        seed=seed, principal=principal, tasks=tuple(t for t, _, _ in picked),
         delay=_delay(rng, "interactive"), llm_seed=rng.randrange(1, 2**31),
-        mode=_weighted(rng, MCP_MODE_WEIGHTS), beyond_role=sum(m for _, m in picked),
+        mode=_weighted(rng, MCP_MODE_WEIGHTS), beyond_role=sum(m for _, m, _ in picked),
+        chain_tasks=sum(c for _, _, c in picked),
     )
 
 

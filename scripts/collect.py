@@ -6,7 +6,7 @@ The whole collection is fixed in advance by a schedule (2,500 sessions,
 kinds (40% scripted MCP, 30% LLM over MCP, 30% A2A), and every session has a
 fixed (kind, seed), so the collection can be repeated and audited.
 
-Each batch is one run (run_id S-BENIGN-01 .. S-BENIGN-10). Contract section
+Each batch is one run (run_id S-BENIGN2-01 .. S-BENIGN2-10). Contract section
 10 splits datasets by run, so the batches double as the units for
 train/validation/test splits.
 
@@ -15,6 +15,12 @@ slot -> session ID -> valid/excluded). That makes a batch resumable: running
 it again skips finished slots and retries excluded ones (at most
 MAX_ATTEMPTS times). Excluded sessions stay in the capture log with their
 reason (contract section 9) - nothing is deleted.
+
+Pilot: the first batch (run S-BENIGN-01, catalogue without multi-step tasks,
+llama3.2:3b) showed that the agent almost never chained tool calls. It is kept
+and documented but left out of the final dataset (dataset/labels/
+excluded_runs.csv, decision D16); its progress is in benign_schedule_pilot.csv.
+The collection restarted with run IDs S-BENIGN2-xx and seeds from 1001.
 
 Command line:
     python scripts/collect.py plan                  # show the schedule (no network)
@@ -51,6 +57,9 @@ import testbed
 
 LABELS_DIR = capture.REPO_ROOT / "dataset" / "labels"
 PROGRESS_PATH = LABELS_DIR / "benign_schedule.csv"
+PILOT_PROGRESS_PATH = LABELS_DIR / "benign_schedule_pilot.csv"
+EXCLUDED_RUNS_PATH = LABELS_DIR / "excluded_runs.csv"
+EXCLUDED_RUNS_COLUMNS = ("run_id", "environment", "reason", "decided_on")
 SERVER_LOG_DIR = capture.CAPTURE_DIR / "logs"
 
 # The agreed collection (decided 2026-11-23). Changing any of these changes
@@ -58,10 +67,12 @@ SERVER_LOG_DIR = capture.CAPTURE_DIR / "logs"
 BENIGN_TOTAL = 2500
 BATCH_SIZE = 250
 BENIGN_MIX = {"mcp-scripted": 0.40, "mcp-llm": 0.30, "a2a": 0.30}
+RUN_PREFIX = "S-BENIGN2-"     # S-BENIGN-01 was the pilot
+SEED_START = 1001             # above every seed the pilot used
 
 MAX_ATTEMPTS = 3              # tries per schedule slot before giving up on it
 MAX_CONSECUTIVE_EXCLUDED = 5  # stop the batch: something systematic is wrong
-TYPICAL_SECONDS = {"mcp-scripted": 4, "mcp-llm": 11, "a2a": 13}  # per session, incl. capture overhead
+TYPICAL_SECONDS = {"mcp-scripted": 7, "mcp-llm": 35, "a2a": 90}  # per session, incl. capture overhead
 
 PROGRESS_COLUMNS = ("index", "batch", "run_id", "kind", "seed", "attempt", "session_id", "status", "reason")
 INTERRUPTED = "interrupted"
@@ -88,7 +99,7 @@ class Slot:
 
 
 def run_id_for(batch: int) -> str:
-    return f"S-BENIGN-{batch:02d}"
+    return f"{RUN_PREFIX}{batch:02d}"
 
 
 def kinds_per_batch(size: int, mix: dict[str, float]) -> dict[str, int]:
@@ -102,7 +113,8 @@ def kinds_per_batch(size: int, mix: dict[str, float]) -> dict[str, int]:
     return counts
 
 
-def schedule(total: int = BENIGN_TOTAL, size: int = BATCH_SIZE, mix: dict[str, float] = BENIGN_MIX) -> list[Slot]:
+def schedule(total: int = BENIGN_TOTAL, size: int = BATCH_SIZE, mix: dict[str, float] = BENIGN_MIX,
+             seed_start: int = SEED_START) -> list[Slot]:
     """The whole collection, slot by slot.
 
     Each batch has exactly the mix; the order of kinds inside a batch is
@@ -115,7 +127,7 @@ def schedule(total: int = BENIGN_TOTAL, size: int = BATCH_SIZE, mix: dict[str, f
     if size < 1 or total < size or total % size:
         raise ValueError("total must be a positive multiple of the batch size")
     counts = kinds_per_batch(size, mix)
-    next_seed = {k: 1 for k in mix}
+    next_seed = {k: seed_start for k in mix}
     slots: list[Slot] = []
     for batch in range(1, total // size + 1):
         kinds = [k for k in mix for _ in range(counts[k])]
@@ -267,6 +279,22 @@ def next_batch(slots: list[Slot] | None = None, progress_path: Path = PROGRESS_P
     return None
 
 
+def excluded_runs(path: Path = EXCLUDED_RUNS_PATH) -> dict[str, dict[str, str]]:
+    """Runs kept on record but left out of the final dataset (run_id -> row).
+
+    The dataset pipeline (Part 6) must drop every manifest row whose run_id
+    is listed here.
+    """
+    path = Path(path)
+    if not path.exists():
+        return {}
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        if tuple(reader.fieldnames or ()) != EXCLUDED_RUNS_COLUMNS:
+            raise CollectionError(f"{path} has an unexpected header")
+        return {r["run_id"]: r for r in reader}
+
+
 # ==========================================================================
 # Status and verification
 # ==========================================================================
@@ -309,6 +337,7 @@ def verify(
     log_path: Path = runner.DEFAULT_LOG,
     capture_dir: Path = capture.CAPTURE_DIR,
     progress_path: Path = PROGRESS_PATH,
+    excluded_runs_path: Path = EXCLUDED_RUNS_PATH,
     check_hashes: bool = True,
 ) -> Report:
     """Check the collected data end to end and summarise it."""
@@ -380,11 +409,33 @@ def verify(
             rep.lines.append(f"{kind:13} {len(sids):>8} {len(sids) / len(valid_slots):>6.1%} "
                              f"{statistics.median(pkts) if pkts else '-':>11} "
                              f"{round(statistics.median(durs), 2) if durs else '-':>9}")
+        llm_rows = [by_sid[sid_of[s.index]] for s in valid_slots if s.kind == "mcp-llm" and sid_of[s.index] in by_sid]
+        if llm_rows:
+            calls = [_tool_calls(r["notes"]) for r in llm_rows]
+            chained = sum(c >= 2 for c in calls)
+            rep.lines.append(f"mcp-llm sessions with 2+ tool calls: {chained}/{len(calls)} ({chained / len(calls):.0%})")
+    try:
+        excl = excluded_runs(excluded_runs_path)
+    except CollectionError as e:
+        rep.errors.append(str(e))
+        excl = {}
+    for run_id, r in excl.items():
+        n = sum(row["run_id"] == run_id for row in rows)
+        rep.lines.append(f"excluded from the final dataset: run {run_id} ({n} manifest rows) - {r['reason']}")
     reasons = Counter(a["reason"].split(":")[0] for att in past.values() for a in att if a["status"] != runner.VALID)
     if reasons:
         rep.lines.append("")
         rep.lines.append("exclusion reasons: " + "; ".join(f"{r} x{n}" for r, n in reasons.most_common(5)))
     return rep
+
+
+def _tool_calls(notes: str) -> int:
+    """Number of tools an LLM session called, from its manifest notes ('tools=a,b')."""
+    for part in notes.split(";"):
+        key, _, value = part.strip().partition("=")
+        if key == "tools":
+            return 0 if value in ("", "-") else len(value.split(","))
+    return 0
 
 
 # ==========================================================================
@@ -413,6 +464,7 @@ def backup(
     capture_dir: Path = capture.CAPTURE_DIR,
     progress_path: Path = PROGRESS_PATH,
     server_log_dir: Path = SERVER_LOG_DIR,
+    extra_labels: tuple[Path, ...] = (PILOT_PROGRESS_PATH, EXCLUDED_RUNS_PATH),
 ) -> BackupReport:
     """Copy captures and label files to dest/AgentNet-software, verifying every copy.
 
@@ -448,7 +500,7 @@ def backup(
             continue
         rep.copied += 1
 
-    for src in (manifest_path, log_path, progress_path):
+    for src in (manifest_path, log_path, progress_path, *extra_labels):
         src = Path(src)
         if src.exists():
             dst = root / "labels" / src.name
@@ -460,7 +512,8 @@ def backup(
 
     if Path(server_log_dir).is_dir():
         (root / "server-logs").mkdir(exist_ok=True)
-        for src in sorted(Path(server_log_dir).glob("*.log")):
+        # *.log: server output; *_audit.jsonl: every tool call (ground truth for attack outcomes)
+        for src in sorted(p for p in Path(server_log_dir).iterdir() if p.suffix in (".log", ".jsonl")):
             _replace(src, root / "server-logs" / src.name)
 
     (root / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n", encoding="utf-8")

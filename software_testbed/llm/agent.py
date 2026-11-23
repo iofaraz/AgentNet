@@ -32,7 +32,9 @@ from pathlib import Path
 import httpx
 
 OLLAMA_URL = "http://127.0.0.1:11434"
-DEFAULT_MODEL = "llama3.2:3b"
+# llama3.1 8B (decision D16): llama3.2:3b stopped after one tool call in 73 of 75
+# pilot sessions; the 8B model completes multi-step tasks.
+DEFAULT_MODEL = "llama3.1:latest"
 
 MAX_STEPS = 8                 # model turns per task
 MAX_CALLS_PER_TURN = 4        # tool calls executed from a single model turn

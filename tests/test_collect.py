@@ -30,11 +30,12 @@ def test_agreed_schedule_has_exact_mix_in_every_batch():
         assert kinds == {"mcp-scripted": 100, "mcp-llm": 75, "a2a": 75}
 
 
-def test_seeds_never_repeat_within_a_kind():
+def test_seeds_never_repeat_within_a_kind_and_skip_the_pilot():
     slots = C.schedule()
     for kind in C.BENIGN_MIX:
         seeds = [s.seed for s in slots if s.kind == kind]
-        assert seeds == list(range(1, len(seeds) + 1))
+        assert seeds == list(range(C.SEED_START, C.SEED_START + len(seeds)))
+    assert C.SEED_START > 100      # the pilot used seeds 1-100
 
 
 def test_schedule_is_reproducible_and_shuffled_per_batch():
@@ -61,7 +62,8 @@ def test_bad_schedules_are_rejected(kwargs):
 
 
 def test_run_ids_follow_the_runner_rules():
-    assert C.run_id_for(1) == "S-BENIGN-01"
+    assert C.run_id_for(1) == "S-BENIGN2-01"
+    assert C.run_id_for(1) != "S-BENIGN-01"        # the pilot's run ID is never reused
     runner.SessionRunner(run_id=C.run_id_for(10))   # accepted by the runner's run_id check
 
 
@@ -113,7 +115,7 @@ def test_batch_runs_only_its_own_slots_and_records_them(tmp_path):
     assert fake.calls == [(s.kind, s.seed) for s in slots if s.batch == 2]
     assert counts["valid"] == 2
     assert [r["index"] for r in rows] == ["2", "3"]
-    assert {r["run_id"] for r in rows} == {"S-BENIGN-02"}
+    assert {r["run_id"] for r in rows} == {C.run_id_for(2)}
     assert all(r["session_id"] and r["status"] == "valid" for r in rows)
 
 
@@ -173,14 +175,14 @@ def test_progress_from_a_different_schedule_is_refused(tmp_path):
 def test_runner_with_wrong_run_id_is_refused(tmp_path):
     slots = C.schedule(total=4, size=2, mix=SMALL_MIX)
     with pytest.raises(ValueError, match="run_id"):
-        C.run_batch(1, slots=slots, session_runner=FakeRunner("S-BENIGN-02"), build=lambda k, s: (k, s),
+        C.run_batch(1, slots=slots, session_runner=FakeRunner(C.run_id_for(2)), build=lambda k, s: (k, s),
                     progress_path=tmp_path / "p.csv", servers=_null(), preflight=None)
 
 
 def test_preflight_runs_only_when_llm_sessions_are_pending(tmp_path):
     calls = []
     slots = C.schedule(total=2, size=2, mix={"mcp-scripted": 1.0})
-    C.run_batch(1, slots=slots, session_runner=FakeRunner("S-BENIGN-01"), build=lambda k, s: (k, s),
+    C.run_batch(1, slots=slots, session_runner=FakeRunner(C.run_id_for(1)), build=lambda k, s: (k, s),
                 progress_path=tmp_path / "p.csv", servers=_null(), preflight=lambda: calls.append(1),
                 echo=lambda _: None)
     assert calls == []
@@ -225,9 +227,21 @@ def test_next_batch(tmp_path):
 # Verify and backup (hand-made files)
 # ======================================================================
 
+def _verify(**kw):
+    """verify() without the repository's real excluded-runs file."""
+    kw.setdefault("excluded_runs_path", kw["progress_path"].parent / "no-excluded-runs.csv")
+    return C.verify(**kw)
+
+
+def _backup(dest, **kw):
+    """backup() without the repository's real pilot/excluded-runs files."""
+    return C.backup(dest, extra_labels=(), **kw)
+
+
 def _make_dataset(tmp_path):
     """One valid MCP session for slot 0 of a 2-slot scripted schedule, plus one excluded attempt."""
     slots = C.schedule(total=2, size=2, mix={"mcp-scripted": 1.0})
+    rid, seed = C.run_id_for(1), slots[0].seed
     pcaps = tmp_path / "pcaps"
     pcaps.mkdir(parents=True)
     paths = dict(manifest_path=tmp_path / "manifest.csv", log_path=tmp_path / "log.csv",
@@ -237,11 +251,11 @@ def _make_dataset(tmp_path):
         name = f"mcp_benign_software_{n:04d}.pcapng"
         (pcaps / name).write_bytes(body)
         log.append({c: "" for c in runner.LOG_COLUMNS} | {
-            "session_id": f"MCP-S-B{n:04d}", "run_id": "S-BENIGN-01", "scenario": "benign-mcp-scripted",
+            "session_id": f"MCP-S-B{n:04d}", "run_id": rid, "scenario": "benign-mcp-scripted",
             "status": status, "capture_file": name, "sha256": C.capture.sha256_of(pcaps / name),
             "packets_captured": "40"})
         C._append_progress(paths["progress_path"], {
-            "index": 0, "batch": 1, "run_id": "S-BENIGN-01", "kind": "mcp-scripted", "seed": 1,
+            "index": 0, "batch": 1, "run_id": rid, "kind": "mcp-scripted", "seed": seed,
             "attempt": n, "session_id": f"MCP-S-B{n:04d}", "status": status,
             "reason": "" if status == "valid" else "scenario error: X"})
     with open(paths["log_path"], "w", newline="", encoding="utf-8") as f:
@@ -252,15 +266,15 @@ def _make_dataset(tmp_path):
         "session_id": "MCP-S-B0002", "label": "Benign", "attack_id": "AT-00", "protocol": "MCP",
         "transport": "HTTP", "environment": "Software", "capture_file": "mcp_benign_software_0002.pcapng",
         "outcome": "N/A", "start_time": "2026-11-23T10:00:00.000+05:00",
-        "end_time": "2026-11-23T10:00:02.500+05:00", "run_id": "S-BENIGN-01", "attack_variant": "N/A",
+        "end_time": "2026-11-23T10:00:02.500+05:00", "run_id": rid, "attack_variant": "N/A",
         "source_device": "", "destination_device": "",
-        "notes": "scenario=benign-mcp-scripted; seed=1; principal=alice"})
+        "notes": f"scenario=benign-mcp-scripted; seed={seed}; principal=alice"})
     return slots, paths
 
 
 def test_verify_passes_on_consistent_data(tmp_path):
     slots, paths = _make_dataset(tmp_path)
-    rep = C.verify(slots=slots, **paths)
+    rep = _verify(slots=slots, **paths)
     assert rep.ok, rep.errors
     text = "\n".join(rep.lines)
     assert "mcp-scripted" in text and "scenario error x1" in text
@@ -270,29 +284,51 @@ def test_verify_detects_a_changed_capture(tmp_path):
     slots, paths = _make_dataset(tmp_path)
     p = paths["capture_dir"] / "mcp_benign_software_0002.pcapng"
     p.write_bytes(b"tampered")
-    rep = C.verify(slots=slots, **paths)
+    rep = _verify(slots=slots, **paths)
     assert any("SHA-256" in e for e in rep.errors)
-    assert C.verify(slots=slots, check_hashes=False, **paths).ok
+    assert _verify(slots=slots, check_hashes=False, **paths).ok
 
 
 def test_verify_detects_missing_valid_capture_and_wrong_seed(tmp_path):
     slots, paths = _make_dataset(tmp_path)
     (paths["capture_dir"] / "mcp_benign_software_0002.pcapng").unlink()
-    rep = C.verify(slots=slots, **paths)
+    rep = _verify(slots=slots, **paths)
     assert any("missing" in e for e in rep.errors)
 
     slots, paths = _make_dataset(tmp_path / "b")
-    text = paths["manifest_path"].read_text(encoding="utf-8").replace("seed=1;", "seed=9;")
+    text = paths["manifest_path"].read_text(encoding="utf-8").replace(f"seed={slots[0].seed};", "seed=9;")
     paths["manifest_path"].write_text(text, encoding="utf-8")
-    rep = C.verify(slots=slots, **paths)
-    assert any("seed 1" in e for e in rep.errors)
+    rep = _verify(slots=slots, **paths)
+    assert any(f"seed {slots[0].seed}" in e for e in rep.errors)
+
+
+def test_verify_lists_excluded_runs_and_chain_share(tmp_path):
+    slots, paths = _make_dataset(tmp_path)
+    excl = tmp_path / "excluded.csv"
+    excl.write_text("run_id,environment,reason,decided_on\n"
+                    f"{C.run_id_for(1)},Software,pilot,2026-11-23\n", encoding="utf-8")
+    rep = _verify(slots=slots, excluded_runs_path=excl, **paths)
+    assert rep.ok and any("excluded from the final dataset" in l and "1 manifest rows" in l for l in rep.lines)
+    excl.write_text("wrong,header\n", encoding="utf-8")
+    assert not _verify(slots=slots, excluded_runs_path=excl, **paths).ok
+
+
+def test_tool_calls_are_counted_from_notes():
+    assert C._tool_calls("scenario=benign-mcp-llm; seed=5; tools=search_files,read_file; tool_errors=0") == 2
+    assert C._tool_calls("scenario=benign-mcp-llm; tools=-; finished=True") == 0
+    assert C._tool_calls("scenario=benign-mcp-scripted; seed=1") == 0
+
+
+def test_real_excluded_runs_file_lists_the_pilot():
+    runs = C.excluded_runs()
+    assert "S-BENIGN-01" in runs and runs["S-BENIGN-01"]["environment"] == "Software"
 
 
 def test_verify_detects_manifest_and_log_disagreeing(tmp_path):
     slots, paths = _make_dataset(tmp_path)
     text = paths["log_path"].read_text(encoding="utf-8").replace(",valid,", ",excluded,")
     paths["log_path"].write_text(text, encoding="utf-8")
-    rep = C.verify(slots=slots, **paths)
+    rep = _verify(slots=slots, **paths)
     assert any("not logged as a valid capture" in e for e in rep.errors)
 
 
@@ -301,7 +337,7 @@ def test_backup_copies_verifies_and_skips_unchanged(tmp_path):
     dest = tmp_path / "drive"
     dest.mkdir()
     kw = {k: v for k, v in paths.items()} | {"server_log_dir": tmp_path / "nologs"}
-    rep = C.backup(dest, **kw)
+    rep = _backup(dest, **kw)
     assert rep.copied == 2 and rep.unchanged == 0 and not rep.errors
     root = dest / "AgentNet-software"
     assert (root / "pcaps" / "mcp_benign_software_0002.pcapng").read_bytes() == b"packets"
@@ -309,11 +345,11 @@ def test_backup_copies_verifies_and_skips_unchanged(tmp_path):
     sums = (root / "SHA256SUMS.txt").read_text(encoding="utf-8")
     assert "pcaps/mcp_benign_software_0002.pcapng" in sums and "labels/manifest.csv" in sums
 
-    rep = C.backup(dest, **kw)
+    rep = _backup(dest, **kw)
     assert rep.copied == 0 and rep.unchanged == 2
 
     (root / "pcaps" / "mcp_benign_software_0002.pcapng").write_bytes(b"bad copy")
-    rep = C.backup(dest, **kw)
+    rep = _backup(dest, **kw)
     assert rep.copied == 1 and (root / "pcaps" / "mcp_benign_software_0002.pcapng").read_bytes() == b"packets"
 
 
@@ -322,11 +358,11 @@ def test_backup_refuses_corrupt_source_and_missing_folder(tmp_path):
     (paths["capture_dir"] / "mcp_benign_software_0002.pcapng").write_bytes(b"tampered")
     dest = tmp_path / "drive"
     dest.mkdir()
-    rep = C.backup(dest, server_log_dir=tmp_path / "nologs", **paths)
+    rep = _backup(dest, server_log_dir=tmp_path / "nologs", **paths)
     assert any("does not match" in e for e in rep.errors)
     assert not (dest / "AgentNet-software" / "pcaps" / "mcp_benign_software_0002.pcapng").exists()
     with pytest.raises(C.CollectionError, match="does not exist"):
-        C.backup(tmp_path / "no-such-folder", **paths)
+        _backup(tmp_path / "no-such-folder", **paths)
 
 
 # ======================================================================
@@ -344,10 +380,11 @@ def test_real_batch_then_verify_and_backup(tmp_path):
     counts = C.run_batch(1, slots=slots, session_runner=run, progress_path=paths["progress_path"],
                          servers=servers, preflight=None, echo=lambda _: None)
     assert counts["valid"] == 2, C.read_progress(paths["progress_path"])
-    rep = C.verify(slots=slots, **paths)
+    rep = _verify(slots=slots, **paths)
     assert rep.ok, rep.errors
     dest = tmp_path / "drive"
     dest.mkdir()
-    b = C.backup(dest, server_log_dir=tmp_path / "logs", **paths)
+    b = _backup(dest, server_log_dir=tmp_path / "logs", **paths)
     assert b.copied == 2 and not b.errors
     assert any((dest / "AgentNet-software" / "server-logs").glob("*.log"))
+    assert any((dest / "AgentNet-software" / "server-logs").glob("*_audit.jsonl"))
