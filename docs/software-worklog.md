@@ -26,7 +26,7 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 | | 2.3 LLM-driven A2A agents | 5 | ✅ Done |
 | | 2.4 Separate hosts so attacker traffic has its own address | 5 | ✅ Done |
 | **3. Benign traffic** | 3.1 Catalogue of benign scenarios with variability | 5 | ✅ Done |
-| | 3.2 Collection run, validation and backup | 5 | ⏳ Next |
+| | 3.2 Collection run, validation and backup | 5 | 🔄 In progress (batch 1 of 10) |
 | **4. Attacks** | 4.1 Attack framework (variants, success checks, failed attempts) | 6 | Pending |
 | | 4.2–4.8 AT-01 to AT-07, one subpart each | 6 | Pending |
 | | 4.9 Attack collection run | 6 | Pending |
