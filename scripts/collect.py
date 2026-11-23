@@ -28,7 +28,10 @@ Command line:
     python scripts/collect.py run --next            # run the first unfinished batch
     python scripts/collect.py status                # progress per batch
     python scripts/collect.py verify                # full check incl. capture hashes
-    python scripts/collect.py backup --to "G:/My Drive/AgentNet"
+    python scripts/collect.py backup                # to DEFAULT_BACKUP_DIR (or --to <folder>)
+
+After a batch, `run` backs up to DEFAULT_BACKUP_DIR automatically if that
+folder exists.
 """
 
 from __future__ import annotations
@@ -61,6 +64,8 @@ PILOT_PROGRESS_PATH = LABELS_DIR / "benign_schedule_pilot.csv"
 EXCLUDED_RUNS_PATH = LABELS_DIR / "excluded_runs.csv"
 EXCLUDED_RUNS_COLUMNS = ("run_id", "environment", "reason", "decided_on")
 SERVER_LOG_DIR = capture.CAPTURE_DIR / "logs"
+# Shared Google Drive folder (decision D7). Override with AGENTNET_BACKUP_DIR.
+DEFAULT_BACKUP_DIR = Path(os.environ.get("AGENTNET_BACKUP_DIR", r"H:\My Drive\AgentNet"))
 
 # The agreed collection (decided 2026-11-23). Changing any of these changes
 # the schedule; verify() refuses progress recorded under a different one.
@@ -550,7 +555,8 @@ def main(argv: list[str]) -> int:
     v = sub.add_parser("verify", help="check manifest, capture log, hashes and schedule")
     v.add_argument("--no-hashes", action="store_true", help="skip recomputing capture hashes")
     b = sub.add_parser("backup", help="copy captures and labels to a folder, verifying every copy")
-    b.add_argument("--to", type=Path, required=True)
+    b.add_argument("--to", type=Path, default=DEFAULT_BACKUP_DIR,
+                   help=f"backup folder (default: {DEFAULT_BACKUP_DIR})")
     args = parser.parse_args(argv)
     slots = schedule()
 
@@ -571,6 +577,13 @@ def main(argv: list[str]) -> int:
             print(f"batch {batch} done in {datetime.now() - started}: valid {counts['valid']}, "
                   f"excluded attempts {counts['excluded']}, gave up {counts['gave_up']}, "
                   f"already done {counts['skipped']}")
+            if DEFAULT_BACKUP_DIR.is_dir():
+                rep = backup(DEFAULT_BACKUP_DIR)
+                print(f"backup to {DEFAULT_BACKUP_DIR}: copied {rep.copied}, already backed up {rep.unchanged}")
+                for e in rep.errors:
+                    print(f"ERROR {e}")
+                return 0 if not rep.errors else 1
+            print(f"WARNING backup folder {DEFAULT_BACKUP_DIR} not found; run 'collect.py backup --to <folder>'")
             return 0
         if args.command == "verify":
             rep = verify(slots=slots, check_hashes=not args.no_hashes)
@@ -582,7 +595,7 @@ def main(argv: list[str]) -> int:
             print("verification passed" if rep.ok else f"verification FAILED ({len(rep.errors)} errors)")
             return 0 if rep.ok else 1
         rep = backup(args.to)
-        print(f"copied {rep.copied}, already backed up {rep.unchanged}")
+        print(f"backup to {args.to}: copied {rep.copied}, already backed up {rep.unchanged}")
         for e in rep.errors:
             print(f"ERROR {e}")
         return 0 if not rep.errors else 1
