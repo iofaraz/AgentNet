@@ -75,6 +75,14 @@ def test_hardware_and_https_are_valid():
     )) == []
 
 
+def test_hardware_link_transports_are_valid():
+    for transport in ("MQTT", "Serial"):
+        assert errors(benign(
+            session_id="MCP-H-B0001", environment="Hardware", transport=transport,
+            capture_file="mcp_benign_hardware_001.pcapng",
+        )) == []
+
+
 def test_hardware_attack_is_valid():
     assert errors(attack(
         session_id="MCP-H-AT07-0001", attack_id="AT-07", environment="Hardware",

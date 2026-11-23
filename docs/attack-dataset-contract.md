@@ -37,14 +37,14 @@ Every captured session must have a corresponding record in the common manifest.
 |---|---|---|
 | session_id | Unique session identifier | MCP-S-AT01-0001 |
 | label | Benign or Attack | Attack |
-| attack_id | Attack category or N/A | AT-01 |
+| attack_id | Attack category; `AT-00` for benign | AT-01 |
 | protocol | MCP or A2A | MCP |
-| transport | Communication transport | HTTP |
+| transport | `HTTP`, `HTTPS`, `MQTT` or `Serial` | HTTP |
 | environment | Software or Hardware | Software |
 | capture_file | Associated PCAP filename | mcp_at01_software_001.pcapng |
-| outcome | Success or Failed | Success |
-| start_time | Session start timestamp | 2026-11-20T10:30:00 |
-| end_time | Session end timestamp | 2026-11-20T10:30:15 |
+| outcome | `Success` or `Failed` (exactly this spelling); `N/A` for benign | Success |
+| start_time | Session start timestamp | 2026-11-20T10:30:00.000+05:00 |
+| end_time | Session end timestamp | 2026-11-20T10:30:15.000+05:00 |
 
 ### Additional Recommended Columns
 
@@ -56,7 +56,7 @@ Every captured session must have a corresponding record in the common manifest.
 | destination_device | Device receiving the traffic |
 | notes | Relevant experimental observations |
 
-Use ISO 8601 timestamps and keep the same timezone convention throughout the project.
+Use ISO 8601 timestamps in local time with the UTC offset and milliseconds, e.g. `2026-11-21T15:46:00.123+05:00`, throughout the project.
 
 ## 4. Session ID Convention
 
@@ -234,6 +234,22 @@ For every experiment, record:
 
 Keep experiment configurations and scripts version-controlled. Never commit passwords, API keys, Wi-Fi credentials, or other secrets.
 
+## 11a. Hardware Design and Shared Tool Names (agreed, v1.2)
+
+- The Raspberry Pi is the **gateway**: it runs the same Python MCP server as the software testbed, and its device tools forward commands to the ESP32.
+- The ESP32 is the physical device: built-in LED (optional buzzer) and readings (simulated or Wi-Fi RSSI; external sensors optional).
+- Device tools keep the software names and arguments: `list_devices`, `read_sensor(sensor_id)`, `set_led(device_id, on, color)`, `sound_buzzer(device_id, duration_ms)`. A tool that has no device behind it is left out, not renamed.
+
+## 11b. Rules Against Label Shortcuts (agreed, v1.2)
+
+A model must learn attack *behaviour*, not side effects of how the data was made:
+
+1. Attack sessions use the same identities (users, tokens) as benign sessions. There is no special "attacker" user.
+2. Attack sessions use the same mix as benign sessions: scripted vs. LLM-driven, MCP handshake types and timing profiles.
+3. Benign traffic includes honest mistakes and legitimate sensitive actions, so "error" or "secret read" alone never means attack.
+4. Raw IP addresses, port numbers, tokens, user names, session IDs, outcome and environment are never model features.
+5. Tools and outputs never reveal real host details (OS, host name, user name) or real data. Everything is synthetic.
+
 ## 12. Repository Responsibilities
 
 ### Attack Simulation
@@ -283,11 +299,12 @@ The dataset pipeline must demonstrate that it can read an existing capture, extr
 
 ---
 
-**Contract Status:** Version 1.1 (proposed — awaiting agreement from both team members)
+**Contract Status:** Version 1.2 (agreed by both team members)
 
 | Version | Change |
 |---|---|
 | 1.0 | Initial version |
 | 1.1 | Session IDs include an environment letter (`S`/`H`) and at least 4 digits, so software and hardware IDs cannot clash when merged (§4). §3 examples corrected to follow §4 and §5. |
+| 1.2 | Agreed by both team members. Benign `attack_id` is `AT-00`; outcome spelling is `Failed`; transport values `HTTP`, `HTTPS`, `MQTT`, `Serial`; timestamp format fixed (§3); hardware design and shared tool names (§11a); rules against label shortcuts (§11b). |
 
 Any changes to field names, labels, IDs, or output formats must be discussed and agreed upon by both team members before implementation.

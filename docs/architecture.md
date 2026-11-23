@@ -109,10 +109,17 @@ The proposed system is compared against the baseline to evaluate whether additio
 
 The hardware testbed will extend the software environment using:
 
-- ESP32 boards running MCP tool servers.
-- Raspberry Pi boards hosting agents and controlled test scenarios.
-- Sensors and output devices for validating device-state changes.
-- A managed network switch with port mirroring for traffic capture.
+- **Raspberry Pi as gateway (agreed design, D11):** the Pi runs the same Python MCP server as the software testbed. Its device tools forward commands to the ESP32.
+- **ESP32 as the physical device:** it switches its built-in LED (and a buzzer, if fitted) and returns readings (simulated temperature/humidity or Wi-Fi signal strength). An external DHT22/BME280 sensor is optional.
+- **Agents (MCP client / LLM agent)** call the Pi's MCP server, preferably from a separate machine on the same network so the MCP traffic crosses the physical network.
+- **Pi ↔ ESP32 link:** HTTP or MQTT over Wi-Fi (visible to Wireshark); Serial is allowed, but Wireshark cannot capture it.
+- A Wi-Fi access point or managed switch with port mirroring for traffic capture.
+
+```
+Agent (laptop/Pi) ──MCP over HTTP──> MCP server on Raspberry Pi ──HTTP/MQTT/Serial──> ESP32 (LED, buzzer, readings)
+```
+
+Device tools use the same names and arguments as the software testbed: `list_devices`, `read_sensor(sensor_id)`, `set_led(device_id, on, color)`, `sound_buzzer(device_id, duration_ms)`.
 
 This environment will help evaluate whether the detection system can generalize from software-generated traffic to real-device network traffic.
 

@@ -84,20 +84,22 @@ Every captured session should contain the following information:
 | session_id | Unique session identifier |
 | traffic_class | Benign or Attack |
 | class_label | 0 for benign, 1 for attack |
-| attack_id | AT-01 to AT-07; empty for benign |
+| attack_id | AT-01 to AT-07; `AT-00` for benign |
 | attack_name | Attack category name |
 | protocol | MCP or A2A |
-| transport | HTTP or HTTPS/TLS |
+| transport | `HTTP`, `HTTPS`, `MQTT` or `Serial` |
 | environment | Software or Hardware |
-| outcome | Success or Failure |
+| outcome | `Success` or `Failed`; `N/A` for benign |
 | capture_file | Associated packet-capture file |
+
+> The binding column names, values and formats are in [`attack-dataset-contract.md`](attack-dataset-contract.md) (v1.2). If this document and the contract differ, the contract wins.
 
 ## 5. Attack Outcome Classification
 
 Attack sessions must also record their outcome:
 
 - **Success:** The predefined test scenario's success condition was met.
-- **Failure:** The scenario was attempted, but its success condition was not met.
+- **Failed:** The scenario was attempted, but its success condition was not met.
 
 An attack attempt must not automatically be labeled successful. Outcomes should be validated using the testbed's predefined conditions, such as application logs or device-state records.
 

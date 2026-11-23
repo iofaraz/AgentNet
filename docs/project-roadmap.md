@@ -33,7 +33,7 @@ The collected traffic will be captured, analyzed, labeled, and converted into a 
 | Agent Frameworks | MCP Python SDK, A2A Python SDK |
 | Backend | FastAPI, Starlette |
 | Hardware | ESP32, Raspberry Pi |
-| Sensors | DHT22, BME280 |
+| Devices | ESP32 built-in LED, optional buzzer; readings simulated or Wi-Fi RSSI (DHT22/BME280 optional) |
 | Network Analysis | Wireshark, tcpdump, Scapy |
 | Network Equipment | Wi-Fi Access Point, Managed Switch |
 | Data Processing | Pandas, NumPy |
@@ -119,11 +119,10 @@ The collected traffic will be captured, analyzed, labeled, and converted into a 
 
 **Tasks:**
 - Prepare ESP32 development boards.
-- Configure Raspberry Pi as an agent or gateway.
-- Connect sensors such as DHT22 or BME280.
-- Configure harmless physical output devices such as LEDs or buzzers.
-- Develop an MCP server for the ESP32 environment.
-- Establish communication between the Raspberry Pi and ESP32.
+- Configure the Raspberry Pi as the **gateway** (agreed design, D11): it runs the software testbed's Python MCP server, whose device tools forward commands to the ESP32.
+- ESP32 firmware: switch the built-in LED (optional buzzer) and return readings (simulated or Wi-Fi RSSI; DHT22/BME280 optional).
+- Keep the software tool names: `list_devices`, `read_sensor`, `set_led`, `sound_buzzer`.
+- Establish communication between the Raspberry Pi and ESP32 (HTTP or MQTT over Wi-Fi preferred; Serial allowed but not capturable).
 - Integrate software agents with the physical network.
 - Configure network equipment and packet capture.
 - Verify communication between physical devices.
@@ -131,8 +130,8 @@ The collected traffic will be captured, analyzed, labeled, and converted into a 
 
 **Deliverables:**
 - Functional physical network testbed.
-- ESP32 MCP server implementation.
-- Raspberry Pi agent/gateway implementation.
+- ESP32 device firmware (LED, readings).
+- Raspberry Pi gateway (MCP server forwarding to the ESP32).
 - Hardware network architecture documentation.
 - Successful physical-device communication.
 - Initial hardware network captures.
@@ -331,6 +330,8 @@ The collected traffic will be captured, analyzed, labeled, and converted into a 
 
 ## 5. Dataset Design
 
+All formats and rules are binding as written in [`attack-dataset-contract.md`](attack-dataset-contract.md) v1.2; the must-follow summary is in the README.
+
 The dataset will contain both benign and attack communication sessions.
 
 **Primary labels:**
@@ -341,9 +342,9 @@ The dataset will contain both benign and attack communication sessions.
 - Session ID.
 - Protocol (MCP/A2A).
 - Attack category (AT-01 to AT-07).
-- Transport (HTTP/TLS).
+- Transport (`HTTP`, `HTTPS`, `MQTT`, `Serial`).
 - Environment (Software/Hardware).
-- Attack outcome (Success/Failure).
+- Attack outcome (`Success`/`Failed`; `N/A` for benign).
 - Capture file reference.
 - Session and experiment metadata.
 
@@ -414,6 +415,6 @@ The project will be considered complete when:
 Phase 4 — Physical Hardware Network Testbed.
 
 **Next Milestone:**
-Establish communication between the ESP32, Raspberry Pi, and software agents over the physical network.
+Establish communication between the ESP32, Raspberry Pi (gateway MCP server), and software agents over the physical network.
 
 **Overall Status:** Software testbed foundation established; physical hardware integration is the next major milestone.

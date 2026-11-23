@@ -60,7 +60,9 @@ NOT_APPLICABLE = "N/A"
 
 LABELS = frozenset({"Benign", "Attack"})
 PROTOCOLS = frozenset({"MCP", "A2A"})
-TRANSPORTS = frozenset({"HTTP", "HTTPS"})
+# MQTT and Serial: links the hardware testbed may use between the Raspberry Pi
+# and the ESP32 (decision D4, contract v1.2).
+TRANSPORTS = frozenset({"HTTP", "HTTPS", "MQTT", "Serial"})
 ENVIRONMENTS = frozenset({"Software", "Hardware"})
 ATTACK_OUTCOMES = frozenset({"Success", "Failed"})
 
