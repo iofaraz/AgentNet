@@ -61,6 +61,7 @@ import testbed
 LABELS_DIR = capture.REPO_ROOT / "dataset" / "labels"
 PROGRESS_PATH = LABELS_DIR / "benign_schedule.csv"
 PILOT_PROGRESS_PATH = LABELS_DIR / "benign_schedule_pilot.csv"
+CPU_PROGRESS_PATH = LABELS_DIR / "benign_schedule_cpu.csv"   # S-BENIGN2-01, excluded (D17)
 EXCLUDED_RUNS_PATH = LABELS_DIR / "excluded_runs.csv"
 EXCLUDED_RUNS_COLUMNS = ("run_id", "environment", "reason", "decided_on")
 SERVER_LOG_DIR = capture.CAPTURE_DIR / "logs"
@@ -72,8 +73,8 @@ DEFAULT_BACKUP_DIR = Path(os.environ.get("AGENTNET_BACKUP_DIR", r"H:\My Drive\Ag
 BENIGN_TOTAL = 2500
 BATCH_SIZE = 250
 BENIGN_MIX = {"mcp-scripted": 0.40, "mcp-llm": 0.30, "a2a": 0.30}
-RUN_PREFIX = "S-BENIGN2-"     # S-BENIGN-01 was the pilot
-SEED_START = 1001             # above every seed the pilot used
+RUN_PREFIX = "S-BENIGN3-"     # S-BENIGN-01 = pilot, S-BENIGN2-01 = CPU model; both excluded
+SEED_START = 2001             # above every seed used by the excluded runs
 
 MAX_ATTEMPTS = 3              # tries per schedule slot before giving up on it
 MAX_CONSECUTIVE_EXCLUDED = 5  # stop the batch: something systematic is wrong
@@ -469,7 +470,7 @@ def backup(
     capture_dir: Path = capture.CAPTURE_DIR,
     progress_path: Path = PROGRESS_PATH,
     server_log_dir: Path = SERVER_LOG_DIR,
-    extra_labels: tuple[Path, ...] = (PILOT_PROGRESS_PATH, EXCLUDED_RUNS_PATH),
+    extra_labels: tuple[Path, ...] = (PILOT_PROGRESS_PATH, CPU_PROGRESS_PATH, EXCLUDED_RUNS_PATH),
 ) -> BackupReport:
     """Copy captures and label files to dest/AgentNet-software, verifying every copy.
 

@@ -12,8 +12,9 @@ confused-deputy experiments meaningful, and it gives benign traffic natural
 variety (different tool choices, arguments and timing).
 
 The agent only needs an open MCP client session and an LLM backend, so it
-does not depend on any particular server. The model runs locally (Ollama on
-127.0.0.1:11434); its traffic is outside the MCP capture filter.
+does not depend on any particular server. The model runs in Ollama, by default
+on 127.0.0.1:11434; set AGENTNET_OLLAMA_URL to use another one (e.g. the lab
+GPU PC through an SSH tunnel). Its traffic is outside the MCP capture filter.
 
 Command line (talks to the testbed MCP server):
     python agent.py "What is the temperature in the lab?" --principal alice
@@ -30,8 +31,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
+import os
 
-OLLAMA_URL = "http://127.0.0.1:11434"
+OLLAMA_URL = os.environ.get("AGENTNET_OLLAMA_URL", "http://127.0.0.1:11434")
 # llama3.1 8B (decision D16): llama3.2:3b stopped after one tool call in 73 of 75
 # pilot sessions; the 8B model completes multi-step tasks.
 DEFAULT_MODEL = "llama3.1:latest"
@@ -40,6 +42,9 @@ MAX_STEPS = 8                 # model turns per task
 MAX_CALLS_PER_TURN = 4        # tool calls executed from a single model turn
 MAX_RESULT_CHARS = 4000       # tool output passed back to the model
 LLM_TIMEOUT = 180.0           # seconds for one model reply (first call loads the model)
+# Fixed context window, so every machine runs the model the same way (Ollama
+# otherwise picks a size from the free memory: 4k on one PC, 32k on another).
+NUM_CTX = 8192
 
 SYSTEM_PROMPT = (
     "You are LabAssistant, an AI agent that helps {principal} with the AgentNet lab workspace. "
@@ -117,7 +122,7 @@ class OllamaChat:
             "messages": messages,
             "tools": tools,
             "stream": False,
-            "options": {"temperature": self.temperature, "seed": self.seed},
+            "options": {"temperature": self.temperature, "seed": self.seed, "num_ctx": NUM_CTX},
         }
         try:
             resp = await self._client.post(f"{self.url}/api/chat", json=payload)

@@ -62,7 +62,7 @@ def test_bad_schedules_are_rejected(kwargs):
 
 
 def test_run_ids_follow_the_runner_rules():
-    assert C.run_id_for(1) == "S-BENIGN2-01"
+    assert C.run_id_for(1) == "S-BENIGN3-01"
     assert C.run_id_for(1) != "S-BENIGN-01"        # the pilot's run ID is never reused
     runner.SessionRunner(run_id=C.run_id_for(10))   # accepted by the runner's run_id check
 

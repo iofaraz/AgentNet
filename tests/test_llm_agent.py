@@ -235,7 +235,7 @@ def test_ollama_request_shape():
     asyncio.run(llm.aclose())
     assert msg == {"role": "assistant", "content": "hi"}
     assert seen["model"] == "m" and seen["stream"] is False and seen["tools"] == [{"type": "function"}]
-    assert seen["options"] == {"temperature": 0.3, "seed": 9}
+    assert seen["options"] == {"temperature": 0.3, "seed": 9, "num_ctx": G.NUM_CTX}
     assert llm.calls == 1
 
 
