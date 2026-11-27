@@ -388,3 +388,12 @@ def test_real_batch_then_verify_and_backup(tmp_path):
     assert b.copied == 2 and not b.errors
     assert any((dest / "AgentNet-software" / "server-logs").glob("*.log"))
     assert any((dest / "AgentNet-software" / "server-logs").glob("*_audit.jsonl"))
+
+
+def test_server_log_label_gives_resumed_batches_new_names(tmp_path):
+    assert C.server_log_label("S-BENIGN3-02", tmp_path) == "S-BENIGN3-02"
+    (tmp_path / "S-BENIGN3-02_mcp-server.log").write_text("")
+    assert C.server_log_label("S-BENIGN3-02", tmp_path) == "S-BENIGN3-02_part2"
+    (tmp_path / "S-BENIGN3-02_part2_mcp-server.log").write_text("")
+    assert C.server_log_label("S-BENIGN3-02", tmp_path) == "S-BENIGN3-02_part3"
+    assert C.server_log_label("S-BENIGN3-03", tmp_path) == "S-BENIGN3-03"

@@ -195,6 +195,9 @@ Like any network, these can be **attacked**: a tool can lie to the assistant, hi
 | **pandas, NumPy, scikit-learn, XGBoost, PyTorch, SHAP** | Data and machine-learning libraries | Later parts: features, training and explaining the detector |
 | **Google Drive for Desktop** | Syncs a folder to Google Drive | Backing up the recordings (too big for GitHub) |
 | **Docker** | Container tool | Installed for later experiments; not needed for the current steps |
+| **Tailscale** | Private, encrypted network between your own devices | Connecting the laptop to the lab computer with the graphics card (GPU), from anywhere |
+| **SSH** | Secure remote login | Running commands on the lab computer, and a private "pipe" (tunnel) to its AI model |
+| **NVIDIA RTX 3090 GPU** (lab computer) | Powerful graphics card | Runs the AI model about 3× faster than a laptop processor |
 
 Exact library versions are fixed in [`requirements.txt`](requirements.txt), so everyone gets the same versions.
 
@@ -307,8 +310,27 @@ Try it yourself (start the tool server in one terminal, then run the agent in an
 - **What has happened so far:**
   1. **Pilot batch** (`S-BENIGN-01`): all 250 sessions were valid, but it showed that the small AI model almost never did multi-step work. It is **kept on record but left out of the final dataset** (listed in `dataset/labels/excluded_runs.csv`).
   2. **Fix:** switched to the larger **llama3.1 8B** model and added multi-step tasks. Now about 37% of AI sessions chain several tool calls.
-  3. **Batch `S-BENIGN2-01`:** 250/250 valid, checked and backed up.
-  4. **Paused:** deciding whether to run the AI model on a lab computer with a powerful graphics card (much faster). If so, `S-BENIGN2-01` will be redone there, so all data comes from the same setup.
+  3. **Batch `S-BENIGN2-01`:** 250/250 valid, checked and backed up, with the AI model running on the laptop's processor (CPU), about 18 seconds per session.
+  4. **Moved the AI model to the lab GPU computer** (decision D17). A lab computer with an **NVIDIA RTX 3090** graphics card now runs the AI model. The recording itself still happens on the laptop. See "Using the lab GPU computer" below.
+  5. **`S-BENIGN2-01` was excluded** (kept on record, not used), because CPU and GPU give different timing, and **all data must come from one setup**. The collection restarted from zero as **`S-BENIGN3-01` … `S-BENIGN3-10`** with fresh seeds (from 2001).
+  6. **Two settings were fixed so every machine runs the model the same way:**
+     - the address of the AI model is now a setting (`AGENTNET_OLLAMA_URL`),
+     - the model's memory window (context) is fixed at 8,192 tokens. Before, each computer chose its own: 4k on one, 32k on another.
+  7. **Results on the GPU (status on 27 Nov 2026):**
+
+     | Batch | Result |
+     |---|---|
+     | `S-BENIGN3-01` | 250/250 valid, 25 min (CPU needed 1 h 15 min) |
+     | `S-BENIGN3-02` | 250/250 valid; paused halfway while travelling and resumed later |
+     | `S-BENIGN3-03` | 250/250 valid, 21 min |
+     | `S-BENIGN3-04` onwards | running |
+
+     - **Speed:** about 5 seconds per session.
+     - **Failures:** only 1 session had to be redone, because it got stuck once.
+     - **Checks and backup:** every batch passed the full check and was backed up to Google Drive.
+     - **Multi-step AI sessions:** 23–35% per batch, rising as batches go on.
+  8. **Fix: resuming a half-finished batch.** The test servers' log files from the first half already existed, and logs are never overwritten. Now a resumed batch writes extra logs named `…_part2_…` next to the first ones.
+  9. **Timing note for the attack step:** the same kind of AI session got slightly faster from batch to batch (about 2.5 s → 1.9 s), most likely because other people sometimes use the shared lab GPU. So attacks should be recorded **in small blocks mixed in time with normal sessions**, not all on one day. Otherwise a detector could learn "slow = attack".
 - **Commands:**
   ```powershell
   .venv\Scripts\python scripts\collect.py plan        # show the full schedule
@@ -318,6 +340,37 @@ Try it yourself (start the tool server in one terminal, then run the agent in an
   .venv\Scripts\python scripts\collect.py backup --to "<your Google Drive folder>"
   ```
 - **Before a long run:** keep the PC plugged in, turn sleep off (Settings → System → Power), make sure Ollama is running, and close heavy programs.
+- **Pausing:** you can simply close the laptop. Every finished session is saved; the session in progress is thrown away and redone. Run `collect.py run --next` again later and it continues where it stopped.
+
+**Using the lab GPU computer (how it is set up)**
+
+The laptop does the recording; the lab computer only runs the AI model. They talk through **Tailscale**, a private network that only your own devices can join, and an **SSH tunnel** (a private pipe).
+
+| Where | What was done | Why |
+|---|---|---|
+| Both computers | Installed Tailscale and logged in with the **same personal account** | So the laptop can reach the lab computer from anywhere, privately |
+| Lab computer | Put everything in one personal folder (e.g. `~/<your-name>-agentnet`), with its own copy of Ollama 0.40.17 (checksum verified) | The lab computer is shared; nothing of other users is touched |
+| Lab computer | Started Ollama so it **only accepts connections from the lab computer itself**, on its own port (e.g. 11500), keeping the model loaded for 24 h | No one else on the network can use it |
+| Lab computer | Downloaded `llama3.1:latest` and checked that its ID starts with `46e0c10c039e`, the same model as the laptop | Same model everywhere |
+| Lab computer | Checked `ollama ps` shows **100% GPU** | Proves the graphics card is used |
+| Laptop | Opened the pipe and told the code to use it (see the commands below) | The laptop's agent uses the lab GPU |
+
+Commands (replace the `<…>` parts with your own; **machine addresses and usernames are deliberately not written in this repository**):
+```bash
+# On the lab computer, inside your folder: start Ollama privately on the GPU
+HOME=$PWD OLLAMA_HOST=127.0.0.1:11500 OLLAMA_MODELS=$PWD/models OLLAMA_KEEP_ALIVE=24h nohup ./ollama/bin/ollama serve > ollama.log 2>&1 &
+OLLAMA_HOST=127.0.0.1:11500 ./ollama/bin/ollama pull llama3.1:latest
+```
+```powershell
+# On the laptop, window 1: open the pipe and leave it open (a blank window is normal)
+ssh -N -L 11500:127.0.0.1:11500 <user>@<lab-computer-tailscale-address>
+# On the laptop, window 2: check the pipe, then collect using the lab GPU
+curl.exe http://127.0.0.1:11500/api/tags
+$env:AGENTNET_OLLAMA_URL = "http://127.0.0.1:11500"
+.venv\Scripts\python scripts\collect.py run --next
+```
+- **If the lab computer restarts,** Ollama there stops and must be started again with the first command.
+- **From far away,** Tailscale may route through a relay server. It still works and is only slightly slower (about 1.2 s per AI reply instead of 1.1 s).
 
 ---
 
@@ -325,7 +378,7 @@ Try it yourself (start the tool server in one terminal, then run the agent in an
 
 | Step | What it means in plain words | Roadmap phase |
 |---|---|---|
-| **3.2 (finish)** | Record the remaining normal batches | 5 |
+| **3.2 (finish)** | Record the remaining normal batches (`S-BENIGN3-04` … `10`) on the lab GPU, check them, back them up, and write the summary | 5 |
 | **4. Attacks** | Build a safe "attack simulator", then record each of the 7 attacks: tool poisoning, rug pull, prompt injection via tool output, confused deputy, data exfiltration, agent card spoofing, and unauthorized device control. Attacks use the **same users, mix and timing** as normal traffic, so the detector must learn the attack itself, not side effects. Failed attacks are recorded too. | 6 |
 | **5. Encrypted traffic** | Repeat sessions over HTTPS (encrypted), where the content can't be read, only sizes and timing | 9 |
 | **6. Dataset pipeline** | Turn recordings into a table of numbers (packet sizes, timing, tool-call sequences); merge the labels; run quality checks; split into training and test parts **by batch** | 7 |
@@ -355,6 +408,9 @@ Try it yourself (start the tool server in one terminal, then run the agent in an
 | `another session runner is already active` | Another collection is still running; wait or close it |
 | `5 sessions in a row were excluded` | Something is broken (often Ollama has stopped). Fix it, then run the same command again; it resumes |
 | Port already in use | A server from an earlier run is still open; close that terminal or restart the PC |
+| `cannot reach Ollama at http://127.0.0.1:11500` | The pipe to the lab computer is closed. Open it again (window 1 above) and approve the Tailscale login page if one appears |
+| The pipe window shows nothing, but the check fails | Tailscale is waiting for a login approval in the browser, or Tailscale is switched off on the laptop |
+| `… already exists; logs are never overwritten` | Fixed: a resumed batch now gets `…_part2_…` logs. Update your code (`git pull`) |
 
 ---
 
@@ -377,5 +433,8 @@ Try it yourself (start the tool server in one terminal, then run the agent in an
 | **SHA-256 / fingerprint** | A code computed from a file; if the file changes even slightly, the code changes |
 | **LLM** | Large Language Model, the AI "brain" (here llama3.1, run by Ollama) |
 | **Testbed** | The safe, isolated fake lab where everything runs |
+| **GPU** | Graphics card; runs AI models much faster than the normal processor (CPU) |
+| **Tailscale** | A private network that only your own devices can join, so they can reach each other from anywhere |
+| **SSH tunnel ("pipe")** | A secure link that makes a program on another computer look like it runs on yours |
 | **Shortcut / data leakage** | When a model learns an accidental difference (e.g. "slow = normal") instead of the real pattern |
 | **Excluded run** | A batch kept on record but deliberately left out of the final dataset |

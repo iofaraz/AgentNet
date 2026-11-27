@@ -242,7 +242,8 @@ def run_batch(
         preflight()
 
     ctx = servers if servers is not None else testbed.running(
-        testbed.MCP_SERVER, testbed.A2A_SERVER, log_dir=SERVER_LOG_DIR, run_id=run_id)
+        testbed.MCP_SERVER, testbed.A2A_SERVER, log_dir=SERVER_LOG_DIR,
+        run_id=server_log_label(run_id, SERVER_LOG_DIR))
     consecutive, last_reason = 0, ""
     with ctx:
         for n, slot in enumerate(todo, start=1):
@@ -274,6 +275,18 @@ def run_batch(
             if slot_state(past[slot.index], max_attempts) == "gave_up":
                 counts["gave_up"] += 1
     return counts
+
+
+def server_log_label(run_id: str, log_dir: Path) -> str:
+    """Name for this run's server logs: run_id, or run_id_partN when a paused
+    batch is resumed (logs are never overwritten, so each part gets its own)."""
+    log_dir = Path(log_dir)
+    if not any(log_dir.glob(f"{run_id}_*")):
+        return run_id
+    part = 2
+    while any(log_dir.glob(f"{run_id}_part{part}_*")):
+        part += 1
+    return f"{run_id}_part{part}"
 
 
 def next_batch(slots: list[Slot] | None = None, progress_path: Path = PROGRESS_PATH) -> int | None:
