@@ -56,6 +56,7 @@ These rules were agreed by both team members on 2026-11-23. The full standard is
 6. Never mark an attack `Success` by assumption. Check it against logs or the device state (e.g. the LED actually turned on).
 7. If a label is unclear, discuss it. **Never guess a label.**
 8. Never edit original PCAPs. Processed data goes in `dataset/processed/`.
+9. If a whole run must be left out of the final dataset (e.g. a pilot made with an older setup), list its `run_id` with the reason in `dataset/labels/excluded_runs.csv`. Keep its captures and records; never delete them.
 
 ### 3. Hardware testbed design (agreed)
 
@@ -83,6 +84,13 @@ Agent (laptop or Pi) ──MCP over HTTP──> MCP server on Raspberry Pi ─�
 3. Benign traffic includes **honest mistakes** and **legitimate sensitive actions** (e.g. an admin reading a secret file), so "error" or "secret read" alone never means attack.
 4. **Never use as model features:** IP addresses, port numbers, tokens, user names, session IDs, outcome or environment.
 5. Tools never return real host details (OS, host name, user name) or real personal data. Everything is synthetic.
+
+**Proposed additions (2026-11-28, from the software side's experience; waiting for the partner's agreement):**
+
+6. **One setup per dataset.** All sessions of a dataset come from the same setup: the same AI model, the same machine running the model, and the same settings. If the setup changes, earlier runs are excluded (rule 2.9) and redone. *Reason:* a CPU run and a GPU run had 3× different timing.
+7. **Record attacks in small blocks mixed in time with normal sessions,** never all attacks in one sitting. *Reason:* load on shared machines changes during the day, so timing alone could reveal the label.
+8. **Keep one variant of every attack unseen** (V4) for the final test, and split train/test **by run**, never by single sessions (contract §10).
+9. **An attack that never reached its target is excluded, not labelled.** Labelling such a session "Attack / Failed" would be a guess.
 
 ### 5. Safety and security
 
@@ -132,4 +140,354 @@ sha256sum mcp_benign_hardware_001.pcapng                    # Raspberry Pi / Lin
 
 ## Project Status
 
-Software testbed and benign scenario catalogue complete (see [`docs/software-worklog.md`](docs/software-worklog.md)). Next: benign traffic collection (software) and the Raspberry Pi gateway + ESP32 testbed (hardware).
+- **Software:** testbed done; **2,500 benign sessions recorded, verified and backed up** (step 3.2, 28 Nov 2026); **attack framework done** (step 4.1). Next: the 7 attacks, one per step (4.2 AT-01 … 4.8 AT-07), then the attack collection run (4.9). Details in [`docs/software-worklog.md`](docs/software-worklog.md).
+- **Hardware:** Raspberry Pi gateway + ESP32 testbed (see rule 3).
+
+---
+
+# Umar Hayat Ali
+
+> **Software side of AgentNet: the complete guide.**
+> This section explains the whole project in plain words, what has been built, how it was built step by step, and how anyone can repeat it from scratch. You do not need to be an expert. Technical words are explained in the [Glossary](#glossary) at the end.
+
+## A. The project in simple words
+
+### What is AgentNet?
+Today, AI assistants don't just chat. They also **do things**: read files, check sensors, switch on devices, or ask other AI assistants for help. They do this by sending messages over a network using two new "languages" (protocols):
+
+- **MCP (Model Context Protocol):** how an AI assistant talks to a **tool server** (for example "read the temperature sensor" or "list the files").
+- **A2A (Agent-to-Agent):** how one AI assistant talks to **another AI assistant**.
+
+Like any network, these can be **attacked**: a tool can lie to the assistant, hidden instructions can trick it, data can be stolen, or a device can be switched on without permission.
+
+**AgentNet builds a "security camera" for these AI networks**: an **Intrusion Detection System (IDS)** that watches the network traffic and raises an alarm when something looks like an attack.
+
+### What will the project deliver?
+1. **A labelled dataset:** thousands of recorded network conversations ("sessions"), each marked *normal* or *attack*. Such data is rare and valuable, because almost none exists for MCP/A2A yet.
+2. **A detector (IDS):** machine-learning models trained on that dataset, including one that still works when the traffic is **encrypted** (when it can't read the messages, only see their size and timing).
+
+### Who does what?
+| Side | Person | Work |
+|---|---|---|
+| Software | Umar Hayat Ali | Software testbed, normal traffic, the 7 attacks, recordings, the software dataset, tests |
+| Hardware | Project partner | Physical testbed: Raspberry Pi + ESP32 (see the agreed design in [Rules — Must Follow](#rules--must-follow-both-team-members)) |
+
+### How it works, in one picture
+```
+ 1. A fake "lab" runs on one computer:
+      users' apps / AI agents ──MCP──> tool server (files, notes, sensors, LED)
+      users ──A2A──> Lab Assistant (an AI agent) ──MCP──> tool server
+
+ 2. Every conversation is RECORDED (like a voice recorder, but for network packets)
+ 3. Each recording gets a LABEL: normal or attack (and which attack)
+ 4. Thousands of labelled recordings = the DATASET
+ 5. A machine-learning model LEARNS from the dataset to spot attacks
+```
+
+---
+
+## B. Tools used (and what each one is for)
+
+| Tool | What it is | What we use it for |
+|---|---|---|
+| **Python 3.13** | Programming language | All project code |
+| **VS Code** | Code editor | Writing and running the code |
+| **Git + GitHub** | Version history + online storage for code | Saving every change; sharing with the partner |
+| **MCP Python SDK 2.3.0** | Ready-made MCP library | Building the tool server and clients |
+| **A2A Python SDK 1.3.1** | Ready-made A2A library | Building the Lab Assistant agent |
+| **Ollama 0.40.17** | Runs AI language models on your own computer (free, offline) | The "brain" of the AI agents |
+| **llama3.1 (8B)** | The AI model itself | Decides which tools to call for a task |
+| **Wireshark / dumpcap / TShark** | Network recording and inspection tools | Recording every packet of a session into a `.pcapng` file |
+| **Npcap** (Windows only) | Driver that lets Wireshark record local traffic | Recording traffic between programs on the same PC |
+| **pytest** | Testing tool | Hundreds of automatic checks that the code works |
+| **pandas, NumPy, scikit-learn, XGBoost, PyTorch, SHAP** | Data and machine-learning libraries | Later parts: features, training and explaining the detector |
+| **Google Drive for Desktop** | Syncs a folder to Google Drive | Backing up the recordings (too big for GitHub) |
+| **Docker** | Container tool | Installed for later experiments; not needed for the current steps |
+| **Tailscale** | Private, encrypted network between your own devices | Connecting the laptop to the lab computer with the graphics card (GPU), from anywhere |
+| **SSH** | Secure remote login | Running commands on the lab computer, and a private "pipe" (tunnel) to its AI model |
+| **NVIDIA RTX 3090 GPU** (lab computer) | Powerful graphics card | Runs the AI model about 3× faster than a laptop processor |
+
+Exact library versions are fixed in [`requirements.txt`](requirements.txt), so everyone gets the same versions.
+
+---
+
+## C. Map of the project folders
+
+| Folder / file | What is inside |
+|---|---|
+| `software_testbed/mcp/` | The MCP tool server (fake workspace: files, notes, synthetic secrets, sensors, LED, buzzer) and a client |
+| `software_testbed/a2a/` | The A2A "Lab Assistant" agent and a client |
+| `software_testbed/llm/` | The AI agent that uses tools through MCP |
+| `software_testbed/addresses.py` | The fake network addresses of every "machine" in the lab |
+| `scripts/manifest.py` | Checks that every label row follows the rules |
+| `scripts/capture.py` | Starts and stops packet recording |
+| `scripts/runner.py` | Runs **one** session: record → run → stop → check → label |
+| `scripts/benign_scenarios.py` | The catalogue of **normal** sessions (who does what, and when) |
+| `scripts/collect.py` | Runs **thousands** of sessions in batches, checks them and backs them up |
+| `scripts/testbed.py`, `scripts/e2e_check.py` | Start the servers; full end-to-end check |
+| `tests/` | Automatic tests for everything above |
+| `dataset/labels/` | The label files (manifest, capture log, schedules, excluded runs) |
+| `traffic/pcaps/` | The recordings (not on GitHub; backed up to Google Drive) |
+| `docs/` | Plans, rules and reports, especially [`docs/software-worklog.md`](docs/software-worklog.md), a detailed diary of every step |
+
+---
+
+## D. Set up your computer (do this once)
+
+These steps are for **Windows 11**, which the software side uses.
+
+1. **Install Python 3.13** from python.org. During setup, tick **"Add Python to PATH"**.
+2. **Install Git** from git-scm.com (keep the default options).
+3. **Install Wireshark** from wireshark.org. When asked, also install **Npcap** and tick **"Support loopback traffic"**. This is essential: without it, local traffic can't be recorded.
+4. **Add Wireshark to PATH:** Windows search → "Edit the system environment variables" → *Environment Variables* → *Path* → *New* → `C:\Program Files\Wireshark`.
+5. **Install Ollama** from ollama.com, then open a terminal and download the model:
+   ```powershell
+   ollama pull llama3.1
+   ```
+6. **Get the code:**
+   ```powershell
+   git clone https://github.com/iofaraz/AgentNet.git
+   cd AgentNet
+   git checkout software-dataset
+   ```
+7. **Create the project's private Python environment and install the libraries:**
+   ```powershell
+   python -m venv .venv
+   .venv\Scripts\python -m pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
+   .venv\Scripts\python -m pip install -r requirements.txt
+   ```
+8. **Check that everything works** (takes a few minutes; Ollama must be running):
+   ```powershell
+   .venv\Scripts\python -m pytest -q
+   ```
+   All tests should pass, with none failed.
+
+---
+
+## E. What was built, step by step
+
+Each step below says **what** was done, **why**, and **how to repeat or check it**. Full details, numbers and reasons are in [`docs/software-worklog.md`](docs/software-worklog.md).
+
+### Phases 1–3: foundation (done before the software work plan)
+- **Phase 1 — Research and planning:** studied MCP/A2A and existing detectors; wrote the architecture, the threat model, the list of 7 attacks and the roadmap (see `docs/`).
+- **Phase 2 — First MCP testbed:** a simple MCP server and client that could talk to each other.
+- **Phase 3 — First A2A testbed:** a simple "echo" agent and client.
+
+### Step 0 — Tools and environment
+- **What:** installed everything in section D and fixed exact library versions.
+- **Why:** so the work runs the same way on any computer, today and later.
+- **Check:** `.venv\Scripts\python -m pytest -q`
+
+### Step 1 — The recording and labelling system (the foundation)
+| Sub-step | What it does, in plain words |
+|---|---|
+| **1.1 Label checker** (`scripts/manifest.py`) | Every recorded session gets one row in a spreadsheet called the **manifest** (who, what, when, normal or attack). The checker refuses any row that breaks the rules (wrong spelling, impossible combinations, a reused ID). Wrong labels would silently ruin the detector. |
+| **1.1b Session names** | Every session gets a unique name such as `MCP-S-B0001` (MCP, Software, Benign, number 1). Hardware uses `H`, so the two teams' names never clash. |
+| **1.2 Automatic recording** (`scripts/capture.py`) | Starts the packet recorder, waits until it is really recording, stops it, and stores a **fingerprint (SHA-256)** of the file, so any later change to the file can be detected. |
+| **1.3 Session runner** (`scripts/runner.py`) | Does one whole session in one go: name it → start recording → run the conversation → stop → check → write the label. If something goes wrong, the session is kept but marked **excluded** with the reason. Nothing is silently lost. |
+| **1.4 End-to-end check** (`scripts/e2e_check.py`) | Proves that all of the above works together on the real servers and that the recordings can be read back correctly. |
+
+Try it: `.venv\Scripts\python scripts\e2e_check.py --sessions 2`
+
+### Step 2 — A realistic fake lab
+| Sub-step | What it does, in plain words |
+|---|---|
+| **2.1 Rich tool server** (`software_testbed/mcp/server.py`) | A pretend company workspace: files (meeting notes, reports, a payroll file, a fake API-keys file), notes, a weather tool, a calculator, and simulated sensors, an LED and a buzzer. Different users have different permissions (viewer, operator, admin). Everything is **fake data**; nothing real is ever exposed. Every tool call is written to an **audit log**, which will later prove whether an attack really succeeded. |
+| **2.2 AI agent over MCP** (`software_testbed/llm/agent.py`) | An AI model (running in Ollama) receives a task in normal language ("what is the lab temperature?") and decides by itself which tools to call. |
+| **2.3 AI Lab Assistant over A2A** (`software_testbed/a2a/`) | Users chat with an assistant agent, which uses the tool server on their behalf, just like real multi-agent systems. |
+| **2.4 Separate "machines"** (`software_testbed/addresses.py`) | Every role gets its own address (e.g. the tool server `127.77.1.10`, the assistant `127.77.2.10`, each user's computer its own address), so the recordings look like traffic between real, separate computers. Attackers will get their own address range. All of this stays inside the PC; nothing reaches the real network. |
+
+Try it yourself (start the tool server in one terminal, then run the agent in another):
+```powershell
+.venv\Scripts\python software_testbed\mcp\server.py
+.venv\Scripts\python software_testbed\llm\agent.py "What is the temperature in the lab?" --principal alice
+```
+
+### Step 3 — Recording normal (benign) traffic
+**3.1 Catalogue of normal behaviour** (`scripts/benign_scenarios.py`)
+- Describes what "normal" looks like. There are three kinds of sessions:
+  - **scripted:** an app calls 1–8 tools in a realistic order,
+  - **AI over MCP:** the AI agent completes one task,
+  - **A2A:** a user sends 1–4 requests to the Lab Assistant.
+- Every session is generated from a number (a **seed**), so it can be recreated exactly later.
+- Realism rules: all users appear; admins sometimes legitimately read secret files; about 5% of steps are honest mistakes; about 40% of AI tasks are multi-step (e.g. "find the file, read it, summarise it"). These rules stop the detector from learning lazy shortcuts like "an error means attack".
+- See some example plans: `.venv\Scripts\python scripts\benign_scenarios.py plans --kind mcp-llm --count 5`
+
+**3.2 The big collection run** (`scripts/collect.py`)
+- **Plan:** 2,500 normal sessions in 10 **batches** of 250. Each batch has exactly 100 scripted, 75 AI-over-MCP and 75 A2A sessions. Batches can be run at different times and **resume automatically** if interrupted.
+- **What has happened so far:**
+  1. **Pilot batch** (`S-BENIGN-01`): all 250 sessions were valid, but it showed that the small AI model almost never did multi-step work. It is **kept on record but left out of the final dataset** (listed in `dataset/labels/excluded_runs.csv`).
+  2. **Fix:** switched to the larger **llama3.1 8B** model and added multi-step tasks. Now about 37% of AI sessions chain several tool calls.
+  3. **Batch `S-BENIGN2-01`:** 250/250 valid, checked and backed up, with the AI model running on the laptop's processor (CPU), about 18 seconds per session.
+  4. **Moved the AI model to the lab GPU computer** (decision D17). A lab computer with an **NVIDIA RTX 3090** graphics card now runs the AI model. The recording itself still happens on the laptop. See "Using the lab GPU computer" below.
+  5. **`S-BENIGN2-01` was excluded** (kept on record, not used), because CPU and GPU give different timing, and **all data must come from one setup**. The collection restarted from zero as **`S-BENIGN3-01` … `S-BENIGN3-10`** with fresh seeds (from 2001).
+  6. **Two settings were fixed so every machine runs the model the same way:**
+     - the address of the AI model is now a setting (`AGENTNET_OLLAMA_URL`),
+     - the model's memory window (context) is fixed at 8,192 tokens. Before, each computer chose its own: 4k on one, 32k on another.
+  7. **Results on the GPU (finished on 28 Nov 2026):**
+
+     | Batch | Result |
+     |---|---|
+     | `S-BENIGN3-01` | 250/250 valid, 25 min (CPU needed 1 h 15 min) |
+     | `S-BENIGN3-02` | 250/250 valid; paused halfway while travelling and resumed later |
+     | `S-BENIGN3-03` | 250/250 valid, 21 min |
+     | `S-BENIGN3-04` | 250/250 valid, 25 min (1 session redone) |
+     | `S-BENIGN3-05` – `07` | 250/250 valid each, about 21–22 min each |
+     | `S-BENIGN3-08` | 250/250 valid; stopped twice when the pipe to the lab computer closed, then resumed |
+     | `S-BENIGN3-09` | 250/250 valid, 27 min |
+     | `S-BENIGN3-10` | 250/250 valid; one pipe drop, the collector waited and continued by itself |
+
+     - **Speed:** about 5 seconds per session.
+     - **Failures:** apart from the pipe drops (see 10 below), only 2 sessions had to be redone: one got stuck once, and one had a one-off error.
+     - **Checks and backup:** every batch passed the full check and was backed up to Google Drive.
+     - **Multi-step AI sessions:** 23–35% per batch, rising as batches go on.
+  8. **Fix: resuming a half-finished batch.** The test servers' log files from the first half already existed, and logs are never overwritten. Now a resumed batch writes extra logs named `…_part2_…` next to the first ones.
+  9. **Timing note for the attack step:** the same kind of AI session got slightly faster from batch to batch (about 2.5 s → 1.9 s), most likely because other people sometimes use the shared lab GPU. So attacks should be recorded **in small blocks mixed in time with normal sessions**, not all on one day. Otherwise a detector could learn "slow = attack".
+  10. **Fix: the pipe to the lab computer can drop.** It closed twice during `S-BENIGN3-08`, for example when the laptop slept or the network changed.
+      - **Problem before:** the collector kept trying sessions without the AI model. Each try failed and used up one of the slot's 3 chances, until 5 failures in a row stopped the batch. 4 sessions used up all their chances without ever reaching the model.
+      - **Now:** after a failed AI session, the collector checks whether the model answers. If not, it **pauses and waits up to 2 hours** for the pipe to come back, and tries made while the pipe was down **don't count**.
+      - **The 4 sessions:** the 16 tries made during the two drops were marked "pipe was down", so they got a fresh chance and the batch kept its exact mix. The failed recordings stay on record; nothing was deleted.
+  11. **Final result (28 Nov 2026): ✅ 2,500 / 2,500 valid.**
+
+      | Session type | Count | Share | Typical packets | Typical length |
+      |---|---|---|---|---|
+      | Scripted app | 1,000 | 40% | 55 | 1.1 s |
+      | AI agent over MCP | 750 | 30% | 39 | 2.2 s |
+      | Agent-to-agent (A2A) | 750 | 30% | 91 | 6.1 s |
+
+      - 2,520 tries in total. 17 failed while the pipe was down (not counted); 3 were one-off problems and were redone. No slot was given up.
+      - **Multi-step AI sessions: 31%** (234 of 750), compared with 3% with the old small model.
+      - The final full check (labels, records, checksum of every recording) passed, and all 3,020 recordings (77 MB) are on Google Drive, each copy verified.
+- **Commands:**
+  ```powershell
+  .venv\Scripts\python scripts\collect.py plan        # show the full schedule
+  .venv\Scripts\python scripts\collect.py run --next  # run the next unfinished batch (backs up at the end)
+  .venv\Scripts\python scripts\collect.py status      # how many sessions are done
+  .venv\Scripts\python scripts\collect.py verify      # full check of labels, recordings and fingerprints
+  .venv\Scripts\python scripts\collect.py backup --to "<your Google Drive folder>"
+  ```
+- **Before a long run:** keep the PC plugged in, turn sleep off (Settings → System → Power), make sure Ollama is running, and close heavy programs.
+- **Pausing:** you can simply close the laptop. Every finished session is saved; the session in progress is thrown away and redone. Run `collect.py run --next` again later and it continues where it stopped.
+
+**Using the lab GPU computer (how it is set up)**
+
+The laptop does the recording; the lab computer only runs the AI model. They talk through **Tailscale**, a private network that only your own devices can join, and an **SSH tunnel** (a private pipe).
+
+| Where | What was done | Why |
+|---|---|---|
+| Both computers | Installed Tailscale and logged in with the **same personal account** | So the laptop can reach the lab computer from anywhere, privately |
+| Lab computer | Put everything in one personal folder (e.g. `~/<your-name>-agentnet`), with its own copy of Ollama 0.40.17 (checksum verified) | The lab computer is shared; nothing of other users is touched |
+| Lab computer | Started Ollama so it **only accepts connections from the lab computer itself**, on its own port (e.g. 11500), keeping the model loaded for 24 h | No one else on the network can use it |
+| Lab computer | Downloaded `llama3.1:latest` and checked that its ID starts with `46e0c10c039e`, the same model as the laptop | Same model everywhere |
+| Lab computer | Checked `ollama ps` shows **100% GPU** | Proves the graphics card is used |
+| Laptop | Opened the pipe and told the code to use it (see the commands below) | The laptop's agent uses the lab GPU |
+
+Commands (replace the `<…>` parts with your own; **machine addresses and usernames are deliberately not written in this repository**):
+```bash
+# On the lab computer, inside your folder: start Ollama privately on the GPU
+HOME=$PWD OLLAMA_HOST=127.0.0.1:11500 OLLAMA_MODELS=$PWD/models OLLAMA_KEEP_ALIVE=24h nohup ./ollama/bin/ollama serve > ollama.log 2>&1 &
+OLLAMA_HOST=127.0.0.1:11500 ./ollama/bin/ollama pull llama3.1:latest
+```
+```powershell
+# On the laptop, window 1: open the pipe and leave it open (a blank window is normal)
+ssh -N -L 11500:127.0.0.1:11500 <user>@<lab-computer-tailscale-address>
+# On the laptop, window 2: check the pipe, then collect using the lab GPU
+curl.exe http://127.0.0.1:11500/api/tags
+$env:AGENTNET_OLLAMA_URL = "http://127.0.0.1:11500"
+.venv\Scripts\python scripts\collect.py run --next
+```
+- **If the lab computer restarts,** Ollama there stops and must be started again with the first command.
+- **From far away,** Tailscale may route through a relay server. It still works and is only slightly slower (about 1.2 s per AI reply instead of 1.1 s).
+
+### Step 4 — Recording attacks
+
+**4.1 The attack framework** (`scripts/attack_framework.py`, `software_testbed/attack_profile.py`) ✅
+- **The attack switch:** before an attack session, a small settings file tells the test servers how to misbehave (for example "show a poisoned tool description"). It's removed right after, even if the session crashes. It **never goes over the network**, so the recordings contain only the attack itself, not a hidden "this is an attack" flag. If the file is broken, the server refuses to work, so the session is thrown out instead of being mislabelled.
+- **The plan (decision D19):**
+
+  | | |
+  |---|---|
+  | Sessions | **2,350** = 7 attacks × 300 + 250 new normal sessions |
+  | Variants | 4 per attack (75 sessions each). **V4 is kept unseen** for the final test, to prove the detector catches new versions of an attack |
+  | Blocks | 94 blocks ("runs") of 25 sessions; each attack block holds one attack variant; **10 normal blocks are spread evenly** between them (decision D18) |
+  | Failed attacks | target 20–30%, measured, not forced |
+
+- **Fair mix:** attack sessions use almost the same mix as normal ones: 40% scripted / 35% AI over MCP / 25% A2A, compared with 40/30/30.
+- **Automatic judge:** after each attack, **Success** or **Failed** is decided only from the servers' audit logs. If the attack never reached its target, the session is thrown out rather than guessed. Nothing is waited for after an attack, so attack recordings end exactly like normal ones.
+- **Confused deputy (AT-04) protocol (decision D20):** stays **MCP only**, as in the contract. The "deputy" will be a privileged MCP tool, so no contract change is needed.
+- **Checks:** 16 new tests, including a real recorded attack session; all 342 project tests pass; 6 of 6 deliberate code breaks were caught.
+- See the plan: `.venv\Scripts\python scripts\attack_framework.py`
+
+---
+
+## F. What comes next
+
+| Step | What it means in plain words | Roadmap phase |
+|---|---|---|
+| **4.2 – 4.8 Attacks** | Build and test one attack per step, each with 4 variants and its own judge: AT-01 tool poisoning, AT-02 rug pull, AT-03 prompt injection via tool output, AT-04 confused deputy, AT-05 data exfiltration, AT-06 agent card spoofing, AT-07 unauthorized device control. Attacks use the **same users, mix and timing** as normal traffic, so the detector must learn the attack itself, not side effects. Failed attacks are recorded too. | 6 |
+| **4.9 Attack collection run** | Record the 2,350 sessions (94 blocks) on the lab GPU, check them and back them up | 6 |
+| **5. Encrypted traffic** | Repeat sessions over HTTPS (encrypted), where the content can't be read, only sizes and timing | 9 |
+| **6. Dataset pipeline** | Turn recordings into a table of numbers (packet sizes, timing, tool-call sequences); merge the labels; run quality checks; split into training and test parts **by batch** | 7 |
+| **7. Compare and deliver** | Charts comparing normal and attack traffic, phase reports, dataset documentation, pull request to `main` | 7 |
+| **Later** | Train baseline detectors (Random Forest, XGBoost, neural network), then the improved protocol-aware and encryption-robust detector; final evaluation, including software → hardware | 8–10 |
+
+---
+
+## G. Important rules (short version)
+
+- **Never guess a label.** Never delete a recording; mark it excluded with a reason instead.
+- **Everything is fake/synthetic:** no real passwords, people or data.
+- **Attacks only inside the testbed**, never against real systems. Physical outputs are harmless (LED, buzzer).
+- **All data in one dataset must come from the same setup** (same AI model, same kind of machine). Otherwise the detector learns the setup instead of the attack.
+- **Attacks are recorded in small blocks mixed in time with normal sessions**, and one variant of each attack (V4) is kept unseen for testing.
+- **An attack that never reached its target is thrown out, not labelled.**
+- **Recordings go to Google Drive, not GitHub.** Check copies with the SHA-256 fingerprints.
+- The full rules are in [Rules — Must Follow](#rules--must-follow-both-team-members) above and in [`docs/attack-dataset-contract.md`](docs/attack-dataset-contract.md).
+
+---
+
+## H. If something goes wrong
+
+| Problem | What to do |
+|---|---|
+| `Ollama is not ready` | Open Ollama (or run `ollama serve`) and check that `ollama list` shows `llama3.1` |
+| `no loopback interface found` | Reinstall Npcap with **"Support loopback traffic"** ticked |
+| `dumpcap` / `tshark` not found | Add `C:\Program Files\Wireshark` to PATH (section D, step 4) and open a new terminal |
+| `another session runner is already active` | Another collection is still running; wait or close it |
+| `5 sessions in a row were excluded` | Something is broken (often Ollama has stopped). Fix it, then run the same command again; it resumes |
+| Port already in use | A server from an earlier run is still open; close that terminal or restart the PC |
+| `cannot reach Ollama at http://127.0.0.1:11500` | The pipe to the lab computer is closed. Open it again (window 1 above) and approve the Tailscale login page if one appears |
+| `LLM backend unreachable - waiting …` | Normal: the pipe dropped and the collector is waiting. Reopen the pipe; it continues by itself within a few seconds |
+| The pipe program runs, but port 11500 still doesn't answer | Look at the pipe window: Tailscale shows a `login.tailscale.com` link to approve. Open it and approve |
+| The pipe window shows nothing, but the check fails | Tailscale is waiting for a login approval in the browser, or Tailscale is switched off on the laptop |
+| `… already exists; logs are never overwritten` | Fixed: a resumed batch now gets `…_part2_…` logs. Update your code (`git pull`) |
+
+---
+
+## Glossary
+
+| Word | Meaning |
+|---|---|
+| **Agent** | An AI program that can take actions (call tools), not just chat |
+| **MCP** | The protocol an AI agent uses to call tools on a tool server |
+| **A2A** | The protocol AI agents use to talk to each other |
+| **IDS** | Intrusion Detection System, a "security camera" for network traffic |
+| **Packet** | A small piece of data sent over a network; every conversation is many packets |
+| **Capture / PCAP / `.pcapng`** | A recording of network packets, saved as a file |
+| **Session** | One recorded conversation (e.g. a user asking the assistant 2 questions) |
+| **Benign** | Normal, harmless traffic (label `AT-00`) |
+| **Dataset** | The collection of all labelled sessions |
+| **Manifest** | The spreadsheet with one label row per session |
+| **Seed** | A number that makes a "random" session repeatable |
+| **Batch / run** | A group of sessions collected together (250 for the normal collection, 25 for the attack collection); training and test data are split by run |
+| **Variant** | One version of an attack (V1–V4), e.g. a different way of hiding the same malicious instruction |
+| **Held-out variant** | A variant never shown to the detector during training, used to test whether it recognises new versions of an attack |
+| **Attack profile** | The small local settings file that tells the test servers how to misbehave during one attack session |
+| **SHA-256 / fingerprint** | A code computed from a file; if the file changes even slightly, the code changes |
+| **LLM** | Large Language Model, the AI "brain" (here llama3.1, run by Ollama) |
+| **Testbed** | The safe, isolated fake lab where everything runs |
+| **GPU** | Graphics card; runs AI models much faster than the normal processor (CPU) |
+| **Tailscale** | A private network that only your own devices can join, so they can reach each other from anywhere |
+| **SSH tunnel ("pipe")** | A secure link that makes a program on another computer look like it runs on yours |
+| **Shortcut / data leakage** | When a model learns an accidental difference (e.g. "slow = normal") instead of the real pattern |
+| **Excluded run** | A batch kept on record but deliberately left out of the final dataset |
