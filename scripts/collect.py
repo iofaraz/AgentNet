@@ -6,7 +6,7 @@ The whole collection is fixed in advance by a schedule (2,500 sessions,
 kinds (40% scripted MCP, 30% LLM over MCP, 30% A2A), and every session has a
 fixed (kind, seed), so the collection can be repeated and audited.
 
-Each batch is one run (run_id S-BENIGN2-01 .. S-BENIGN2-10). Contract section
+Each batch is one run (run_id S-BENIGN3-01 .. S-BENIGN3-10). Contract section
 10 splits datasets by run, so the batches double as the units for
 train/validation/test splits.
 
@@ -21,6 +21,11 @@ llama3.2:3b) showed that the agent almost never chained tool calls. It is kept
 and documented but left out of the final dataset (dataset/labels/
 excluded_runs.csv, decision D16); its progress is in benign_schedule_pilot.csv.
 The collection restarted with run IDs S-BENIGN2-xx and seeds from 1001.
+
+GPU: S-BENIGN2-01 ran the model on the laptop CPU. The model then moved to
+a lab RTX 3090 (AGENTNET_OLLAMA_URL), so S-BENIGN2-01 is excluded as well
+(timing differs, decision D17; progress in benign_schedule_cpu.csv) and the
+collection restarted as S-BENIGN3-xx with seeds from 2001.
 
 Command line:
     python scripts/collect.py plan                  # show the schedule (no network)
@@ -46,6 +51,7 @@ import shutil
 import stat
 import statistics
 import sys
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -82,6 +88,15 @@ TYPICAL_SECONDS = {"mcp-scripted": 7, "mcp-llm": 35, "a2a": 90}  # per session, 
 
 PROGRESS_COLUMNS = ("index", "batch", "run_id", "kind", "seed", "attempt", "session_id", "status", "reason")
 INTERRUPTED = "interrupted"
+# An attempt that failed while the LLM backend (Ollama, possibly through a
+# tunnel) was unreachable. Like INTERRUPTED it does not use up the slot's
+# tries: the session itself was never given a fair chance. The capture log
+# still keeps the excluded session with its original reason.
+BACKEND_DOWN = "llm backend unreachable"
+NOT_COUNTED = (INTERRUPTED, BACKEND_DOWN)
+BACKEND_WAIT_SECONDS = 2 * 3600   # how long to wait for the backend to come back
+BACKEND_POLL_SECONDS = 30
+LLM_KINDS = ("mcp-llm", "a2a")
 
 
 class CollectionError(RuntimeError):
@@ -192,7 +207,7 @@ def slot_state(attempts: list[dict[str, str]], max_attempts: int = MAX_ATTEMPTS)
     """valid | gave_up | pending.  Interrupted attempts (Ctrl+C) do not count."""
     if any(a["status"] == runner.VALID for a in attempts):
         return "valid"
-    tries = sum(a["reason"] != INTERRUPTED for a in attempts)
+    tries = sum(not a["reason"].startswith(NOT_COUNTED) for a in attempts)
     return "gave_up" if tries >= max_attempts else "pending"
 
 
@@ -210,6 +225,33 @@ def check_ollama() -> None:
                               f"make sure '{agent.DEFAULT_MODEL}' is installed.") from None
 
 
+def ollama_reachable() -> bool:
+    import agent
+    try:
+        asyncio.run(agent.model_digest(agent.DEFAULT_MODEL))
+        return True
+    except Exception:
+        return False
+
+
+def ollama_backend_check(echo: Callable[[str], None] = print, *, reachable: Callable[[], bool] = ollama_reachable,
+                         wait_s: float = BACKEND_WAIT_SECONDS, poll_s: float = BACKEND_POLL_SECONDS,
+                         sleep: Callable[[float], None] = time.sleep) -> str:
+    """'up' if the model answers now; otherwise wait for it: 'recovered' or 'down'."""
+    if reachable():
+        return "up"
+    echo(f"LLM backend unreachable - waiting up to {wait_s / 60:.0f} min for it to come back "
+         f"(reopen the SSH tunnel / start Ollama)")
+    waited = 0.0
+    while waited < wait_s:
+        sleep(poll_s)
+        waited += poll_s
+        if reachable():
+            echo(f"LLM backend is back after {waited / 60:.1f} min; continuing")
+            return "recovered"
+    return "down"
+
+
 def run_batch(
     batch: int,
     *,
@@ -222,6 +264,7 @@ def run_batch(
     max_attempts: int = MAX_ATTEMPTS,
     max_consecutive: int = MAX_CONSECUTIVE_EXCLUDED,
     echo: Callable[[str], None] = print,
+    backend_check: Callable[[Callable[[str], None]], str] | None = ollama_backend_check,
 ) -> Counter:
     """Run (or resume) one batch. Returns counts of valid / excluded / gave_up / skipped."""
     slots = schedule() if slots is None else slots
@@ -257,14 +300,23 @@ def run_batch(
                     # The runner has already logged the session as excluded.
                     _append_progress(progress_path, {**base, "status": runner.EXCLUDED, "reason": INTERRUPTED})
                     raise
-                row = {**base, "session_id": res.session_id, "status": res.status,
-                       "reason": manifest.sanitize_free_text(res.reason)[: runner.MAX_REASON]}
+                reason = manifest.sanitize_free_text(res.reason)[: runner.MAX_REASON]
+                backend = "up"
+                if not res.valid and backend_check and slot.kind in LLM_KINDS:
+                    backend = backend_check(echo)
+                    if backend != "up":
+                        reason = f"{BACKEND_DOWN}; {reason}"[: runner.MAX_REASON]
+                row = {**base, "session_id": res.session_id, "status": res.status, "reason": reason}
                 _append_progress(progress_path, row)
                 past.setdefault(slot.index, []).append({k: str(v) for k, v in row.items()})
                 counts[res.status] += 1
                 echo(f"[{run_id} {n}/{len(todo)}] {res.session_id:14} {slot.kind:13} seed={slot.seed:<5} "
                      f"{res.status}{(': ' + res.reason) if res.reason else ''}")
-                if res.valid:
+                if backend == "down":
+                    raise CollectionError(
+                        f"the LLM backend did not come back within {BACKEND_WAIT_SECONDS / 60:.0f} min; "
+                        f"stopping the batch. Reopen the tunnel / start Ollama, then run the batch again to resume.")
+                if res.valid or backend == "recovered":
                     consecutive = 0
                 else:
                     consecutive, last_reason = consecutive + 1, res.reason

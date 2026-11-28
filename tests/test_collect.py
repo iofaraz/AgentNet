@@ -97,6 +97,7 @@ def _run(tmp_path, batch=1, statuses=None, **kw):
     fake = FakeRunner(C.run_id_for(batch), statuses)
     counts = C.run_batch(batch, slots=slots, session_runner=fake, build=lambda k, s: (k, s),
                          progress_path=tmp_path / "progress.csv", servers=_null(), preflight=kw.pop("preflight", None),
+                         backend_check=kw.pop("backend_check", None),
                          echo=lambda _: None, **kw)
     return counts, fake, C.read_progress(tmp_path / "progress.csv")
 
@@ -397,3 +398,48 @@ def test_server_log_label_gives_resumed_batches_new_names(tmp_path):
     (tmp_path / "S-BENIGN3-02_part2_mcp-server.log").write_text("")
     assert C.server_log_label("S-BENIGN3-02", tmp_path) == "S-BENIGN3-02_part3"
     assert C.server_log_label("S-BENIGN3-03", tmp_path) == "S-BENIGN3-03"
+
+
+def test_backend_outage_attempts_do_not_use_up_tries(tmp_path):
+    # Every session fails while "the tunnel is down"; the check reports a recovery each time.
+    slots = C.schedule(total=2, size=2, mix={"mcp-llm": 1.0})
+    fails = [runner.EXCLUDED] * 6
+    checks = []
+    def check(echo):
+        checks.append(1)
+        return "recovered" if len(checks) <= 6 else "up"
+    counts, fake, _ = _run(tmp_path, statuses=fails, slots=slots, backend_check=check)
+    assert counts["valid"] == 2 and counts["gave_up"] == 0       # 6 outage attempts, then success
+    rows = C.read_progress(tmp_path / "progress.csv")
+    assert sum(r["reason"].startswith(C.BACKEND_DOWN) for r in rows) == 6
+
+
+def test_backend_that_stays_down_stops_the_batch(tmp_path):
+    slots = C.schedule(total=2, size=2, mix={"mcp-llm": 1.0})
+    with pytest.raises(C.CollectionError, match="did not come back"):
+        _run(tmp_path, statuses=[runner.EXCLUDED], slots=slots, backend_check=lambda echo: "down")
+    rows = C.read_progress(tmp_path / "progress.csv")
+    assert len(rows) == 1 and rows[0]["reason"].startswith(C.BACKEND_DOWN)
+    assert C.slot_state(rows) == "pending"                        # the slot keeps all its tries
+
+
+def test_real_session_failures_still_count_when_backend_is_up(tmp_path):
+    slots = C.schedule(total=2, size=2, mix={"mcp-llm": 1.0})
+    counts, _, _ = _run(tmp_path, statuses=[runner.EXCLUDED] * 3, slots=slots, backend_check=lambda echo: "up")
+    assert counts["gave_up"] == 1
+
+
+def test_scripted_failures_never_wait_for_the_backend(tmp_path):
+    slots = C.schedule(total=2, size=2, mix={"mcp-scripted": 1.0})
+    def check(echo):
+        raise AssertionError("scripted sessions do not need the LLM")
+    _run(tmp_path, statuses=[runner.EXCLUDED], slots=slots, backend_check=check)
+
+
+def test_ollama_backend_check_waits_and_reports():
+    seq = iter([False, False, True])
+    out = C.ollama_backend_check(lambda m: None, reachable=lambda: next(seq), wait_s=100, poll_s=10, sleep=lambda s: None)
+    assert out == "recovered"
+    assert C.ollama_backend_check(lambda m: None, reachable=lambda: True) == "up"
+    assert C.ollama_backend_check(lambda m: None, reachable=lambda: False, wait_s=30, poll_s=10,
+                                  sleep=lambda s: None) == "down"

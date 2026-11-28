@@ -26,7 +26,7 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 | | 2.3 LLM-driven A2A agents | 5 | ✅ Done |
 | | 2.4 Separate hosts so attacker traffic has its own address | 5 | ✅ Done |
 | **3. Benign traffic** | 3.1 Catalogue of benign scenarios with variability | 5 | ✅ Done |
-| | 3.2 Collection run, validation and backup | 5 | ⏸ Paused — S-BENIGN2-01 done (1 of 10); waiting for the lab GPU decision |
+| | 3.2 Collection run, validation and backup | 5 | ▶ In progress — on the lab GPU as S-BENIGN3-01…10; batches 01–03 done (750/750 valid), 04 running (27 Nov 2026) |
 | **4. Attacks** | 4.1 Attack framework (variants, success checks, failed attempts) | 6 | Pending |
 | | 4.2–4.8 AT-01 to AT-07, one subpart each | 6 | Pending |
 | | 4.9 Attack collection run | 6 | Pending |
@@ -62,7 +62,8 @@ Items that need a decision from both team members, or that affect the hardware s
 | D14 | **Per-leg protocol features in multi-service captures.** An A2A session capture holds both the A2A and the MCP leg; selecting HTTP requests "on a port" with tshark returned both legs and double-counted them. | Requests are selected by destination port (`http.request && tcp.dstport == <port>`) in the end-to-end check. | Rule for Part 6: extract protocol features per leg by destination address/port. |
 | D15 | **IP addresses and ports must not be model features.** Testbed hosts have fixed addresses, attacker hosts will use `127.77.9.0/24`, and the hardware testbed uses real network addresses. A model given raw addresses or ports would learn "this address = attack" or "this address range = software", not behaviour. | Recorded. | Rule for Part 6: no raw IPs or port numbers as features; use behavioural features instead (e.g. "destination never seen in benign traffic", number of distinct peers, direction). **Agreed (2026-11-23):** applies to both testbeds. |
 | D16 | **Benign AI sessions almost never chained tool calls.** In the pilot batch (S-BENIGN-01), llama3.2:3b made exactly one tool call in 73 of 75 LLM-over-MCP sessions; even "read docs/…md" became a search. Several attacks (e.g. AT-03) are chains, so "2+ tool calls" alone would reveal the label. In a probe of 5 multi-step tasks, llama3.2:3b completed 2, llama3.1 8B completed 5 (about 5–10× slower). | **Decided (2026-11-23):** default model llama3.1 8B; about 40% of each role's tasks are multi-step (`*_CHAIN_TASKS`, recorded as `chain_tasks=` in notes); the pilot is kept but excluded from the final dataset (`dataset/labels/excluded_runs.csv`); collection restarted as S-BENIGN2-01…10 with seeds from 1001. | Rule for Part 4: attack LLM sessions use the same model. Rule for Part 6: drop rows of runs in `excluded_runs.csv`. |
-| D17 | **Lab GPU for the LLM (proposed).** Collection on the laptop CPU takes ~75 min per batch (~12 h for the rest). A lab PC with an RTX 3090 (Linux, in the lab Tailscale network, no Ollama installed, GPU idle, 758 GB free) could run the model ~5–10× faster. Plan: Ollama 0.40.17 in the user's home folder, listening only on 127.0.0.1, reached from the laptop through an SSH tunnel over Tailscale; same model ID (`46e0c10c039e`); captures stay on the laptop. | Paused after S-BENIGN2-01 (250/250 valid, 37% of LLM sessions chained, verified, backed up). | Needs: invitation to the lab Tailscale network. If the GPU is used, S-BENIGN2-01 (CPU timing) goes into `excluded_runs.csv` and batches restart on the GPU, so LLM timing is the same across benign and attack data. |
+| D17 | **Lab GPU for the LLM.** Collection on the laptop CPU took ~75 min per batch (~12 h for the rest). A shared lab PC with an RTX 3090 (Linux) runs the model instead: Ollama 0.40.17 (checksum verified) in a personal folder, listening only on the lab PC's own loopback, reached from the laptop through an SSH tunnel over the user's own Tailscale network; same model ID (`46e0c10c039e`), `ollama ps` shows 100% GPU; captures stay on the laptop. | **Decided (2026-11-26):** GPU used. S-BENIGN2-01 (CPU timing) added to `excluded_runs.csv` (progress kept as `benign_schedule_cpu.csv`); collection restarted as S-BENIGN3-01…10 with seeds from 2001. Code: model address from `AGENTNET_OLLAMA_URL`; context window fixed at `NUM_CTX = 8192` (Ollama otherwise sizes it from free memory: 32k on the lab GPU). Machine addresses and user names are kept out of the repository. | Rule for Part 4: attack LLM sessions use the same GPU, model and context size. |
+| D18 | **LLM timing drifts with load on the shared GPU.** The median single-tool `mcp-llm` session went 2.51 → 2.29 → 2.06 → 1.90 s across S-BENIGN3-01…04, although the work was identical. Batches 03–04 ran through a Tailscale relay and were still faster, so the network is not the cause; other users of the shared GPU most likely are. | Recorded; benign collection continues (the variation is realistic). | Rule for Part 4: record attacks in small blocks interleaved in time with benign sessions, not in one sitting, so time-of-day load is not a label signal. Check timing per run in 7.1. |
 | D8 | **Where capture hashes are stored.** The contract's manifest has no hash column, and its schema must not change without agreement. | **Resolved in 1.3:** a separate capture log `dataset/labels/capture_log.csv` (one row per session, valid or excluded) holds hash, packet/drop counts, scenario name, software versions and exclusion reasons. The manifest is unchanged. **Agreed (2026-11-23):** hardware keeps its own simpler log (`dataset/labels/hardware_capture_log.csv`); structure in `README.md`. |
 
 ---
@@ -753,3 +754,63 @@ python scripts/benign_scenarios.py sample --per-kind 3
 - *Why include mistakes and admin secret reads in benign traffic?* If benign traffic never contained errors or secret reads, a model would learn "error = attack" or "secret read = attack" — shortcuts that fail in reality.
 - *Why mix scripted and LLM-driven sessions?* Real deployments have both apps and AI agents; their timing differs, so both must appear in benign and attack traffic in the same proportions (D13).
 - *How was variety verified?* By measuring 2,000 plans (93% distinct) and by capturing real sessions (every packet count different), instead of assuming it.
+
+---
+
+### 3.2 — Collection run, validation and backup (in progress)
+
+**Goal:** record 2,500 benign sessions in 10 batches of 250 (40% `mcp-scripted`, 30% `mcp-llm`, 30% `a2a`), verify every label and capture hash, and back everything up to Google Drive (D7).
+
+**Files:** `scripts/collect.py` (schedule, batch runner, verify, backup) · tests: `tests/test_collect.py` (37 tests) · labels: `dataset/labels/benign_schedule.csv`, `benign_schedule_pilot.csv`, `benign_schedule_cpu.csv`, `excluded_runs.csv`
+
+**History of the run**
+
+| Run | Setup | Result | Status |
+|---|---|---|---|
+| S-BENIGN-01 | llama3.2:3b, no multi-step tasks, laptop CPU | 250/250 valid; 1 tool call in 73/75 LLM sessions | Excluded (D16) |
+| S-BENIGN2-01 | llama3.1 8B + multi-step tasks, laptop CPU | 250/250 valid in 1 h 15 min (~18 s/session); 37% chained | Excluded (D17, CPU timing) |
+| S-BENIGN3-01 | llama3.1 8B, lab RTX 3090, direct Tailscale link | 250/250 valid in 25 min | ✅ |
+| S-BENIGN3-02 | same; paused at 137/250, resumed next day through a relay | 250/250 valid | ✅ |
+| S-BENIGN3-03 | same, through a relay | 250/250 valid in 21 min | ✅ |
+| S-BENIGN3-04 … 10 | same | running | ▶ |
+
+Status on 27 Nov 2026: 873 S-BENIGN3 sessions valid. One attempt was excluded (an `a2a` session that hung until the 900 s scenario timeout); its slot was retried and succeeded. Every finished batch passed `collect.py verify` (manifest ⇔ capture log ⇔ progress, SHA-256 of every capture) and was backed up to Google Drive with verified hashes.
+
+**Measurements per batch (S-BENIGN3, medians)**
+
+| Kind | 01 | 02 | 03 |
+|---|---|---|---|
+| `a2a` duration | 6.8 s | 6.7 s | 5.7 s |
+| `mcp-llm` duration | 2.7 s | 2.5 s | 2.1 s |
+| `mcp-scripted` duration | 1.0 s | 1.1 s | 1.2 s |
+| `mcp-llm` sessions with 2+ tool calls | 23% | 24% | 33% |
+
+**Lab GPU set-up (D17)**
+1. Tailscale on both machines, signed in with the user's own account (the lab PC left a lab-wide tailnet whose previous user no longer needs it).
+2. On the lab PC, everything in one personal folder: Ollama 0.40.17 unpacked from the official release (SHA-256 checked), `HOME` and `OLLAMA_MODELS` pointed into that folder, server bound to the loopback address on a separate port, `OLLAMA_KEEP_ALIVE=24h`.
+3. `llama3.1:latest` pulled; ID `46e0c10c039e` matches the laptop; `ollama ps` → 100% GPU.
+4. On the laptop: `ssh -N -L <port>:127.0.0.1:<port> <user>@<lab-pc>` and `AGENTNET_OLLAMA_URL=http://127.0.0.1:<port>`.
+5. All 27 LLM agent tests pass against the lab model. Reply time ~1.1 s direct, ~1.2 s through a relay.
+
+**Findings**
+1. **Context window depended on the machine (fixed).** Ollama picks the context size from free memory (32,768 tokens on the RTX 3090, smaller on the laptop). The agent now always sends `num_ctx = 8192`, so prompts are handled identically everywhere.
+2. **Resuming a paused batch failed (fixed).** Server logs are named per run and never overwritten, so restarting a half-finished batch stopped with "already exists". `collect.py` now names the logs of a resumed batch `<run>_part2_*`, `<run>_part3_*`, … (`server_log_label`, with a test). No data was affected.
+3. **Chained-call share is lower than on the CPU** (23–33% vs 37%) but rising; with 75 LLM sessions per batch the difference is within chance. It will be re-checked over the whole run.
+4. **Timing drift on the shared GPU** — recorded as D18.
+5. **Tunnel drops used up retries (fixed).** The SSH tunnel to the lab PC closed twice during S-BENIGN3-08. Each time the collector kept running sessions; they failed and used up their tries, until 5 failures in a row stopped the batch. 4 slots had used all 3 tries without ever reaching the model. Fix: after a failed `mcp-llm`/`a2a` session, `collect.py` checks whether the model answers. If not, it marks the attempt `llm backend unreachable` (not counted against the slot, like an interrupted attempt), waits up to 2 h for the backend to come back, and stops only if it never does (`ollama_backend_check`, 5 tests).
+6. **The 16 attempts made during the two outages were relabelled** `llm backend unreachable` in `benign_schedule.csv` (decided by the user, 2026-11-28), so those 4 slots got fresh tries and the batch keeps its exact mix. The failed sessions stay in the capture log as excluded, with their original reasons; nothing was deleted.
+
+**Security review**
+
+| Risk | Finding | Action |
+|---|---|---|
+| Lab PC details on GitHub | The tunnel address, user name and folder are needed to run the setup | Kept out of every repository file (checked by search); README and this log use placeholders |
+| Other users of the shared lab PC reaching the model or our files | Ollama could listen on the network | Ollama listens only on the lab PC's own loopback; reached only through the SSH tunnel over the user's private tailnet; files in a personal folder |
+| GitHub credentials on a shared machine | — | No repository clone or credentials on the lab PC; only Ollama and the model are there |
+| Captures leaving the laptop | — | Captures and labels stay on the laptop; only LLM prompts and replies cross the tunnel (synthetic testbed data) |
+
+**Viva notes**
+- *Why move the model to a GPU?* Collection time per batch dropped from 75 to about 21–25 minutes, so the full run takes hours, not days.
+- *Why redo S-BENIGN2-01 instead of keeping it?* CPU sessions are about 3× slower. Mixing them in would give the dataset two timing populations that have nothing to do with attacks; all data must come from one setup.
+- *Why fix the context size?* Otherwise the same model behaves slightly differently on different machines, which is an uncontrolled variable.
+- *What happens if the laptop closes mid-batch?* The interrupted session never reaches the dataset; finished sessions are already saved and hashed, and `run --next` resumes from the first unfinished slot.
