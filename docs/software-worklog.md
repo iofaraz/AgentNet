@@ -26,8 +26,8 @@ Record of the software-side work: software testbeds, MCP/A2A simulations, benign
 | | 2.3 LLM-driven A2A agents | 5 | ✅ Done |
 | | 2.4 Separate hosts so attacker traffic has its own address | 5 | ✅ Done |
 | **3. Benign traffic** | 3.1 Catalogue of benign scenarios with variability | 5 | ✅ Done |
-| | 3.2 Collection run, validation and backup | 5 | ▶ In progress — on the lab GPU as S-BENIGN3-01…10; batches 01–03 done (750/750 valid), 04 running (27 Nov 2026) |
-| **4. Attacks** | 4.1 Attack framework (variants, success checks, failed attempts) | 6 | Pending |
+| | 3.2 Collection run, validation and backup | 5 | ✅ Done (28 Nov 2026) — 2,500/2,500 valid on the lab GPU (S-BENIGN3-01…10), verified, backed up |
+| **4. Attacks** | 4.1 Attack framework (variants, success checks, failed attempts) | 6 | ✅ Done |
 | | 4.2–4.8 AT-01 to AT-07, one subpart each | 6 | Pending |
 | | 4.9 Attack collection run | 6 | Pending |
 | **5. Encrypted traffic** | 5.1 HTTPS for MCP and A2A | 9 (data) | Pending |
@@ -64,6 +64,8 @@ Items that need a decision from both team members, or that affect the hardware s
 | D16 | **Benign AI sessions almost never chained tool calls.** In the pilot batch (S-BENIGN-01), llama3.2:3b made exactly one tool call in 73 of 75 LLM-over-MCP sessions; even "read docs/…md" became a search. Several attacks (e.g. AT-03) are chains, so "2+ tool calls" alone would reveal the label. In a probe of 5 multi-step tasks, llama3.2:3b completed 2, llama3.1 8B completed 5 (about 5–10× slower). | **Decided (2026-11-23):** default model llama3.1 8B; about 40% of each role's tasks are multi-step (`*_CHAIN_TASKS`, recorded as `chain_tasks=` in notes); the pilot is kept but excluded from the final dataset (`dataset/labels/excluded_runs.csv`); collection restarted as S-BENIGN2-01…10 with seeds from 1001. | Rule for Part 4: attack LLM sessions use the same model. Rule for Part 6: drop rows of runs in `excluded_runs.csv`. |
 | D17 | **Lab GPU for the LLM.** Collection on the laptop CPU took ~75 min per batch (~12 h for the rest). A shared lab PC with an RTX 3090 (Linux) runs the model instead: Ollama 0.40.17 (checksum verified) in a personal folder, listening only on the lab PC's own loopback, reached from the laptop through an SSH tunnel over the user's own Tailscale network; same model ID (`46e0c10c039e`), `ollama ps` shows 100% GPU; captures stay on the laptop. | **Decided (2026-11-26):** GPU used. S-BENIGN2-01 (CPU timing) added to `excluded_runs.csv` (progress kept as `benign_schedule_cpu.csv`); collection restarted as S-BENIGN3-01…10 with seeds from 2001. Code: model address from `AGENTNET_OLLAMA_URL`; context window fixed at `NUM_CTX = 8192` (Ollama otherwise sizes it from free memory: 32k on the lab GPU). Machine addresses and user names are kept out of the repository. | Rule for Part 4: attack LLM sessions use the same GPU, model and context size. |
 | D18 | **LLM timing drifts with load on the shared GPU.** The median single-tool `mcp-llm` session went 2.51 → 2.29 → 2.06 → 1.90 s across S-BENIGN3-01…04, although the work was identical. Batches 03–04 ran through a Tailscale relay and were still faster, so the network is not the cause; other users of the shared GPU most likely are. | Recorded; benign collection continues (the variation is realistic). | Rule for Part 4: record attacks in small blocks interleaved in time with benign sessions, not in one sitting, so time-of-day load is not a label signal. Check timing per run in 7.1. |
+| D19 | **Plan of the attack collection.** How many attack sessions, how many variants, how many failed attempts, and how to avoid the time-of-day signal of D18. | **Decided (2026-11-28):** 300 sessions per attack (2,100), 4 variants each (75 sessions per variant) with V4 held out as the unseen variant; failed attacks targeted at 20–30% (measured, not forced); attacks recorded in runs of 25 sessions (one attack variant per run) interleaved with 250 new benign sessions (10 runs, `S-BENIGN4-xx`). Implemented in `scripts/attack_framework.py` (4.1). | Rule for Part 6: split by run; all V4 runs go to the test set. |
+| D20 | **AT-04 protocol.** The contract lists AT-04 (confused deputy) as MCP only, but the testbed's natural deputy is the A2A Lab Assistant, which uses its admin service account for requesters (an A2A session that carries an MCP leg). | **Decided (2026-11-28):** keep AT-04 MCP-only, as in the contract; the deputy will be a privileged MCP tool. No contract change. | Design of the privileged tool in 4.5. |
 | D8 | **Where capture hashes are stored.** The contract's manifest has no hash column, and its schema must not change without agreement. | **Resolved in 1.3:** a separate capture log `dataset/labels/capture_log.csv` (one row per session, valid or excluded) holds hash, packet/drop counts, scenario name, software versions and exclusion reasons. The manifest is unchanged. **Agreed (2026-11-23):** hardware keeps its own simpler log (`dataset/labels/hardware_capture_log.csv`); structure in `README.md`. |
 
 ---
@@ -757,7 +759,7 @@ python scripts/benign_scenarios.py sample --per-kind 3
 
 ---
 
-### 3.2 — Collection run, validation and backup (in progress)
+### 3.2 — Collection run, validation and backup
 
 **Goal:** record 2,500 benign sessions in 10 batches of 250 (40% `mcp-scripted`, 30% `mcp-llm`, 30% `a2a`), verify every label and capture hash, and back everything up to Google Drive (D7).
 
@@ -772,9 +774,23 @@ python scripts/benign_scenarios.py sample --per-kind 3
 | S-BENIGN3-01 | llama3.1 8B, lab RTX 3090, direct Tailscale link | 250/250 valid in 25 min | ✅ |
 | S-BENIGN3-02 | same; paused at 137/250, resumed next day through a relay | 250/250 valid | ✅ |
 | S-BENIGN3-03 | same, through a relay | 250/250 valid in 21 min | ✅ |
-| S-BENIGN3-04 … 10 | same | running | ▶ |
+| S-BENIGN3-04 | same | 250/250 valid in 25 min (1 attempt redone) | ✅ |
+| S-BENIGN3-05 … 07 | same | 250/250 valid each, 21–22 min each | ✅ |
+| S-BENIGN3-08 | same; two tunnel outages | 250/250 valid | ✅ |
+| S-BENIGN3-09 | same | 250/250 valid in 27 min | ✅ |
+| S-BENIGN3-10 | same; one tunnel outage (collector waited, then resumed) | 250/250 valid | ✅ |
 
-Status on 27 Nov 2026: 873 S-BENIGN3 sessions valid. One attempt was excluded (an `a2a` session that hung until the 900 s scenario timeout); its slot was retried and succeeded. Every finished batch passed `collect.py verify` (manifest ⇔ capture log ⇔ progress, SHA-256 of every capture) and was backed up to Google Drive with verified hashes.
+**Final result (28 Nov 2026):** 2,500/2,500 sessions valid in 2,520 attempts; 0 slots gave up. Exclusion reasons: 17 attempts during tunnel outages (not counted), 2 one-off scenario errors, 1 timeout. `collect.py verify` (with SHA-256 of every capture) passed. Google Drive holds 3,020 captures (2,520 S-BENIGN3 attempts + 500 from the excluded runs) with verified hashes, about 77 MB.
+
+| Kind | Sessions | Share | Median packets | Median duration |
+|---|---|---|---|---|
+| `a2a` | 750 | 30% | 91 | 6.1 s |
+| `mcp-llm` | 750 | 30% | 39 | 2.2 s |
+| `mcp-scripted` | 1,000 | 40% | 55 | 1.1 s |
+
+`mcp-llm` sessions with 2+ tool calls: 234/750 (31%).
+
+Interim status on 27 Nov 2026: 873 S-BENIGN3 sessions valid. One attempt was excluded (an `a2a` session that hung until the 900 s scenario timeout); its slot was retried and succeeded. Every finished batch passed `collect.py verify` (manifest ⇔ capture log ⇔ progress, SHA-256 of every capture) and was backed up to Google Drive with verified hashes.
 
 **Measurements per batch (S-BENIGN3, medians)**
 
@@ -795,7 +811,7 @@ Status on 27 Nov 2026: 873 S-BENIGN3 sessions valid. One attempt was excluded (a
 **Findings**
 1. **Context window depended on the machine (fixed).** Ollama picks the context size from free memory (32,768 tokens on the RTX 3090, smaller on the laptop). The agent now always sends `num_ctx = 8192`, so prompts are handled identically everywhere.
 2. **Resuming a paused batch failed (fixed).** Server logs are named per run and never overwritten, so restarting a half-finished batch stopped with "already exists". `collect.py` now names the logs of a resumed batch `<run>_part2_*`, `<run>_part3_*`, … (`server_log_label`, with a test). No data was affected.
-3. **Chained-call share is lower than on the CPU** (23–33% vs 37%) but rising; with 75 LLM sessions per batch the difference is within chance. It will be re-checked over the whole run.
+3. **Chained-call share** ended at 31% over all 750 LLM sessions (23–35% per batch; 37% in the excluded CPU batch). Far from the pilot's 3%, so "2+ tool calls" is not an attack signal.
 4. **Timing drift on the shared GPU** — recorded as D18.
 5. **Tunnel drops used up retries (fixed).** The SSH tunnel to the lab PC closed twice during S-BENIGN3-08. Each time the collector kept running sessions; they failed and used up their tries, until 5 failures in a row stopped the batch. 4 slots had used all 3 tries without ever reaching the model. Fix: after a failed `mcp-llm`/`a2a` session, `collect.py` checks whether the model answers. If not, it marks the attempt `llm backend unreachable` (not counted against the slot, like an interrupted attempt), waits up to 2 h for the backend to come back, and stops only if it never does (`ollama_backend_check`, 5 tests).
 6. **The 16 attempts made during the two outages were relabelled** `llm backend unreachable` in `benign_schedule.csv` (decided by the user, 2026-11-28), so those 4 slots got fresh tries and the batch keeps its exact mix. The failed sessions stay in the capture log as excluded, with their original reasons; nothing was deleted.
@@ -814,3 +830,71 @@ Status on 27 Nov 2026: 873 S-BENIGN3 sessions valid. One attempt was excluded (a
 - *Why redo S-BENIGN2-01 instead of keeping it?* CPU sessions are about 3× slower. Mixing them in would give the dataset two timing populations that have nothing to do with attacks; all data must come from one setup.
 - *Why fix the context size?* Otherwise the same model behaves slightly differently on different machines, which is an uncontrolled variable.
 - *What happens if the laptop closes mid-batch?* The interrupted session never reaches the dataset; finished sessions are already saved and hashed, and `run --next` resumes from the first unfinished slot.
+
+---
+
+### 4.1 — Attack framework
+
+**Goal:** the shared machinery every attack uses, so that each attack (4.2–4.8) only has to describe what it does and how its success is checked — and so that no attack can be labelled by guesswork or give the model a shortcut.
+
+**Files:** `scripts/attack_framework.py` (plan, schedule, scenario builder, evidence helpers) · `software_testbed/attack_profile.py` (attack switch for the servers) · changes to `software_testbed/mcp/server.py` and `scripts/testbed.py` · tests: `tests/test_attack_framework.py` (16 tests)
+
+**1. The attack switch (attack profile)**
+- An attack scenario writes a small JSON file before its session and removes it afterwards; the servers read it on every request. The file never travels over the network, so nothing in a capture says "attack" except the attack itself.
+- No file = normal behaviour, identical to the benign collection.
+- First field: replacement tool descriptions (used by AT-01 and AT-02). Each later attack adds the fields it needs.
+- Strict validation, shared by writer and reader. A profile that is present but invalid makes the server fail its requests, so the session is **excluded**, never labelled as an attack in which nothing happened.
+
+**2. Plan and schedule (D19)**
+
+| | |
+|---|---|
+| Sessions | 2,350 = 7 attacks × 300 + 250 benign |
+| Runs | 94 runs of 25: 84 attack runs (one attack variant each), 10 benign runs spread evenly (a benign run every 8–11 runs) |
+| Variants | V1–V4, 75 sessions each; V4 held out (its runs contain only V4) |
+| Seeds | attacks from 10001 (all unique); benign from 3001 per kind (S-BENIGN3 used 2001–3000) |
+| Run IDs | `S-ATTACK-001` … `S-ATTACK-084`, `S-BENIGN4-01` … `S-BENIGN4-10` |
+
+**3. Session drivers (contract §11b.2)**
+
+| Attack | Scripted MCP | LLM over MCP | A2A |
+|---|---|---|---|
+| AT-01 Tool poisoning | 50% | 50% | — (MCP only) |
+| AT-02 Rug pull | 50% | 50% | — (MCP only) |
+| AT-03 Prompt injection | 40% | 60% | — (MCP only) |
+| AT-04 Confused deputy | 60% | 40% | — (MCP only, D20) |
+| AT-05 Data exfiltration | 35% | 30% | 35% |
+| AT-06 Agent card spoofing | — | — | 100% (A2A only) |
+| AT-07 Unauthorized actuation | 40% | 25% | 35% |
+| **All attacks** | **40%** | **35%** | **25%** |
+| Benign | 40% | 30% | 30% |
+
+LLM-targeting attacks also hit scripted clients: a scripted app that receives a poisoned description or an injected result ignores it, which is a real, failed attempt. That keeps the driver mix close to benign, and is one natural source of `Failed` outcomes.
+
+**4. Scenario builder and verdicts**
+- `attack_scenario(...)`: write profile → run the attack → remove profile (also if the session crashes) → read the MCP and A2A audit logs for the session window → the attack's **judge** returns a verdict.
+- Verdict = *delivered* (did the attack reach its target?) + *success* (was its predefined condition met?) + a short reason recorded in the manifest notes.
+- *Not delivered* → the session is excluded (e.g. the client never listed the poisoned tools).
+- Nothing is waited for after the attack, so attack captures end like benign ones. A trailing pause would make "longer capture = attack" a shortcut. This works because both servers write their audit entry *before* replying.
+- Evidence helpers: tool calls by tool/decision/principal, canary secrets (and whether a text contains any), carried-out device actuations.
+
+**Test results:** 16 new tests; whole suite 342 passed, 15 skipped (live-LLM tests; the tunnel to the lab GPU was closed). A real captured attack session runs through the session runner: label `Attack`, `AT-01`, variant `V1`, outcome from the judge, session ID `MCP-S-AT01-…`, profile removed afterwards.
+
+**Mutation tests (6 of 6 caught):** profile left active after a failed session · undelivered attack labelled anyway · invalid profile ignored by the server · audit entries not limited to the session window · held-out variant mixed into training runs · server ignoring the profile.
+
+**Security review**
+
+| Risk | Finding | Action |
+|---|---|---|
+| An attack setting leaking into later (benign) sessions | Profile must be removed even if a session crashes | Removed in a `finally` block (tested); servers re-read the file on every request |
+| A mislabelled attack session | A broken or missing profile would give an "attack" with no attack | Strict validation before writing; invalid file → server fails → session excluded; undelivered attacks excluded (tested) |
+| Label hidden in the traffic | A session-ID or "attack" flag sent to the server would be a shortcut | Control channel is a local file, never the network; judges match audit entries by time |
+| Oversized or malformed control file | — | Size limit (64 KB), text limits, unknown fields rejected; atomic write |
+| Attacks escaping the testbed | — | Everything stays on the 127.77.0.0/16 loopback testbed; profiles only change what the testbed's own servers say |
+
+**Viva notes**
+- *How is an attack session labelled Success or Failed?* By the attack's judge, from the servers' audit logs of that session's time window, never assumed (taxonomy §5).
+- *Why exclude undelivered attacks?* If the attack never reached its target, the traffic contains no attack; labelling it "Attack/Failed" would be a guess.
+- *Why a control file instead of a special request?* Anything sent over the network would appear in the capture and could become the feature the model learns.
+- *Why hold out V4?* To test whether the detector recognises a new version of an attack it has not seen in training (contract §10).
+- *Why interleave benign runs with attack runs?* The shared GPU's load changes over the day (D18); if attacks were all recorded at one time, timing alone could reveal the label.

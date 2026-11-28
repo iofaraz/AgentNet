@@ -11,6 +11,8 @@ Without it they are "anonymous" and may only use the public utility tools.
 Environment variables (set by scripts/testbed.py during collection runs):
     AGENTNET_AUDIT_LOG   path of the JSON-lines audit log (default: no log)
     AGENTNET_SEED        seed for the synthetic world (default: workspace.DEFAULT_SEED)
+    AGENTNET_ATTACK_PROFILE  attack profile file read on every request
+                         (software_testbed/attack_profile.py; default: none = normal behaviour)
 
 Run by hand:
     python server.py
@@ -35,6 +37,7 @@ from workspace import DEFAULT_SEED, AccessDenied, InvalidRequest, World
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 import addresses  # noqa: E402
+import attack_profile  # noqa: E402
 
 HOST = addresses.MCP_HOST
 PORT = addresses.MCP_PORT
@@ -68,7 +71,9 @@ DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 ACTUATES = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True)
 
 
-def create_server(world: World, audit: AuditLog) -> MCPServer:
+def create_server(world: World, audit: AuditLog,
+                  profiles: attack_profile.ProfileReader | None = None) -> MCPServer:
+    profiles = profiles or attack_profile.ProfileReader(None, DESCRIPTIONS)
     mcp = MCPServer(
         "AgentNet MCP Server",
         instructions="Synthetic lab workspace for AgentNet network experiments.",
@@ -90,6 +95,7 @@ def create_server(world: World, audit: AuditLog) -> MCPServer:
                 call_args = {k: v for k, v in kwargs.items() if k != "ctx"}
                 principal, role = "unknown", "unknown"
                 try:
+                    profiles.current()          # an invalid attack profile fails the call (session excluded)
                     caller = caller_of(ctx)
                     principal, role = caller.principal, caller.role
                     result = fn(*args, caller=caller, ctx=ctx, **call_args)
@@ -119,6 +125,19 @@ def create_server(world: World, audit: AuditLog) -> MCPServer:
             mcp.add_tool(wrapper, name=name, description=DESCRIPTIONS[name], annotations=annotations)
             return fn
         return decorator
+
+    # Tool descriptions can be replaced for one attack session (AT-01, AT-02).
+    _list_tools = mcp.list_tools
+
+    async def list_tools_with_profile():
+        tools = await _list_tools()
+        overrides = profiles.current().descriptions
+        for tool in tools:
+            if tool.name in overrides:
+                tool.description = overrides[tool.name]
+        return tools
+
+    mcp.list_tools = list_tools_with_profile
 
     # ---- utility (anyone) ------------------------------------------------------
 
@@ -192,10 +211,12 @@ def create_server(world: World, audit: AuditLog) -> MCPServer:
 def main() -> None:
     seed = int(os.environ.get("AGENTNET_SEED", DEFAULT_SEED))
     audit = AuditLog(os.environ.get("AGENTNET_AUDIT_LOG"))
-    server = create_server(World(seed), audit)
+    profiles = attack_profile.ProfileReader.from_env(DESCRIPTIONS)
+    server = create_server(World(seed), audit, profiles)
     print("Starting AgentNet MCP Server...")
     print(f"Endpoint: http://{HOST}:{PORT}/mcp")
     print(f"Audit log: {audit.path or 'disabled'}")
+    print(f"Attack profile file: {profiles.path or 'none'}")
     try:
         server.run(transport="streamable-http", host=HOST, port=PORT)
     finally:

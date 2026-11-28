@@ -85,6 +85,13 @@ Agent (laptop or Pi) ──MCP over HTTP──> MCP server on Raspberry Pi ─�
 4. **Never use as model features:** IP addresses, port numbers, tokens, user names, session IDs, outcome or environment.
 5. Tools never return real host details (OS, host name, user name) or real personal data. Everything is synthetic.
 
+**Proposed additions (2026-11-28, from the software side's experience; waiting for the partner's agreement):**
+
+6. **One setup per dataset.** All sessions of a dataset come from the same setup: the same AI model, the same machine running the model, and the same settings. If the setup changes, earlier runs are excluded (rule 2.9) and redone. *Reason:* a CPU run and a GPU run had 3× different timing.
+7. **Record attacks in small blocks mixed in time with normal sessions,** never all attacks in one sitting. *Reason:* load on shared machines changes during the day, so timing alone could reveal the label.
+8. **Keep one variant of every attack unseen** (V4) for the final test, and split train/test **by run**, never by single sessions (contract §10).
+9. **An attack that never reached its target is excluded, not labelled.** Labelling such a session "Attack / Failed" would be a guess.
+
 ### 5. Safety and security
 
 1. All experiments run **only inside our isolated testbed**. Never attack real networks, devices or services.
@@ -133,7 +140,8 @@ sha256sum mcp_benign_hardware_001.pcapng                    # Raspberry Pi / Lin
 
 ## Project Status
 
-Software testbed and benign scenario catalogue complete (see [`docs/software-worklog.md`](docs/software-worklog.md)). Next: benign traffic collection (software) and the Raspberry Pi gateway + ESP32 testbed (hardware).
+- **Software:** testbed done; **2,500 benign sessions recorded, verified and backed up** (step 3.2, 28 Nov 2026); **attack framework done** (step 4.1). Next: the 7 attacks, one per step (4.2 AT-01 … 4.8 AT-07), then the attack collection run (4.9). Details in [`docs/software-worklog.md`](docs/software-worklog.md).
+- **Hardware:** Raspberry Pi gateway + ESP32 testbed (see rule 3).
 
 ---
 
@@ -316,7 +324,7 @@ Try it yourself (start the tool server in one terminal, then run the agent in an
   6. **Two settings were fixed so every machine runs the model the same way:**
      - the address of the AI model is now a setting (`AGENTNET_OLLAMA_URL`),
      - the model's memory window (context) is fixed at 8,192 tokens. Before, each computer chose its own: 4k on one, 32k on another.
-  7. **Results on the GPU (status on 28 Nov 2026):**
+  7. **Results on the GPU (finished on 28 Nov 2026):**
 
      | Batch | Result |
      |---|---|
@@ -326,7 +334,8 @@ Try it yourself (start the tool server in one terminal, then run the agent in an
      | `S-BENIGN3-04` | 250/250 valid, 25 min (1 session redone) |
      | `S-BENIGN3-05` – `07` | 250/250 valid each, about 21–22 min each |
      | `S-BENIGN3-08` | 250/250 valid; stopped twice when the pipe to the lab computer closed, then resumed |
-     | `S-BENIGN3-09` – `10` | running (2,171 of 2,500 sessions valid so far) |
+     | `S-BENIGN3-09` | 250/250 valid, 27 min |
+     | `S-BENIGN3-10` | 250/250 valid; one pipe drop, the collector waited and continued by itself |
 
      - **Speed:** about 5 seconds per session.
      - **Failures:** apart from the pipe drops (see 10 below), only 2 sessions had to be redone: one got stuck once, and one had a one-off error.
@@ -338,6 +347,17 @@ Try it yourself (start the tool server in one terminal, then run the agent in an
       - **Problem before:** the collector kept trying sessions without the AI model. Each try failed and used up one of the slot's 3 chances, until 5 failures in a row stopped the batch. 4 sessions used up all their chances without ever reaching the model.
       - **Now:** after a failed AI session, the collector checks whether the model answers. If not, it **pauses and waits up to 2 hours** for the pipe to come back, and tries made while the pipe was down **don't count**.
       - **The 4 sessions:** the 16 tries made during the two drops were marked "pipe was down", so they got a fresh chance and the batch kept its exact mix. The failed recordings stay on record; nothing was deleted.
+  11. **Final result (28 Nov 2026): ✅ 2,500 / 2,500 valid.**
+
+      | Session type | Count | Share | Typical packets | Typical length |
+      |---|---|---|---|---|
+      | Scripted app | 1,000 | 40% | 55 | 1.1 s |
+      | AI agent over MCP | 750 | 30% | 39 | 2.2 s |
+      | Agent-to-agent (A2A) | 750 | 30% | 91 | 6.1 s |
+
+      - 2,520 tries in total. 17 failed while the pipe was down (not counted); 3 were one-off problems and were redone. No slot was given up.
+      - **Multi-step AI sessions: 31%** (234 of 750), compared with 3% with the old small model.
+      - The final full check (labels, records, checksum of every recording) passed, and all 3,020 recordings (77 MB) are on Google Drive, each copy verified.
 - **Commands:**
   ```powershell
   .venv\Scripts\python scripts\collect.py plan        # show the full schedule
@@ -379,14 +399,33 @@ $env:AGENTNET_OLLAMA_URL = "http://127.0.0.1:11500"
 - **If the lab computer restarts,** Ollama there stops and must be started again with the first command.
 - **From far away,** Tailscale may route through a relay server. It still works and is only slightly slower (about 1.2 s per AI reply instead of 1.1 s).
 
+### Step 4 — Recording attacks
+
+**4.1 The attack framework** (`scripts/attack_framework.py`, `software_testbed/attack_profile.py`) ✅
+- **The attack switch:** before an attack session, a small settings file tells the test servers how to misbehave (for example "show a poisoned tool description"). It's removed right after, even if the session crashes. It **never goes over the network**, so the recordings contain only the attack itself, not a hidden "this is an attack" flag. If the file is broken, the server refuses to work, so the session is thrown out instead of being mislabelled.
+- **The plan (decision D19):**
+
+  | | |
+  |---|---|
+  | Sessions | **2,350** = 7 attacks × 300 + 250 new normal sessions |
+  | Variants | 4 per attack (75 sessions each). **V4 is kept unseen** for the final test, to prove the detector catches new versions of an attack |
+  | Blocks | 94 blocks ("runs") of 25 sessions; each attack block holds one attack variant; **10 normal blocks are spread evenly** between them (decision D18) |
+  | Failed attacks | target 20–30%, measured, not forced |
+
+- **Fair mix:** attack sessions use almost the same mix as normal ones: 40% scripted / 35% AI over MCP / 25% A2A, compared with 40/30/30.
+- **Automatic judge:** after each attack, **Success** or **Failed** is decided only from the servers' audit logs. If the attack never reached its target, the session is thrown out rather than guessed. Nothing is waited for after an attack, so attack recordings end exactly like normal ones.
+- **Confused deputy (AT-04) protocol (decision D20):** stays **MCP only**, as in the contract. The "deputy" will be a privileged MCP tool, so no contract change is needed.
+- **Checks:** 16 new tests, including a real recorded attack session; all 342 project tests pass; 6 of 6 deliberate code breaks were caught.
+- See the plan: `.venv\Scripts\python scripts\attack_framework.py`
+
 ---
 
 ## F. What comes next
 
 | Step | What it means in plain words | Roadmap phase |
 |---|---|---|
-| **3.2 (finish)** | Finish the last normal batches (`S-BENIGN3-09`, `10`) on the lab GPU, run the final check of all 2,500, back them up, and write the summary | 5 |
-| **4. Attacks** | Build a safe "attack simulator", then record each of the 7 attacks: tool poisoning, rug pull, prompt injection via tool output, confused deputy, data exfiltration, agent card spoofing, and unauthorized device control. Attacks use the **same users, mix and timing** as normal traffic, so the detector must learn the attack itself, not side effects. Failed attacks are recorded too. | 6 |
+| **4.2 – 4.8 Attacks** | Build and test one attack per step, each with 4 variants and its own judge: AT-01 tool poisoning, AT-02 rug pull, AT-03 prompt injection via tool output, AT-04 confused deputy, AT-05 data exfiltration, AT-06 agent card spoofing, AT-07 unauthorized device control. Attacks use the **same users, mix and timing** as normal traffic, so the detector must learn the attack itself, not side effects. Failed attacks are recorded too. | 6 |
+| **4.9 Attack collection run** | Record the 2,350 sessions (94 blocks) on the lab GPU, check them and back them up | 6 |
 | **5. Encrypted traffic** | Repeat sessions over HTTPS (encrypted), where the content can't be read, only sizes and timing | 9 |
 | **6. Dataset pipeline** | Turn recordings into a table of numbers (packet sizes, timing, tool-call sequences); merge the labels; run quality checks; split into training and test parts **by batch** | 7 |
 | **7. Compare and deliver** | Charts comparing normal and attack traffic, phase reports, dataset documentation, pull request to `main` | 7 |
@@ -400,6 +439,8 @@ $env:AGENTNET_OLLAMA_URL = "http://127.0.0.1:11500"
 - **Everything is fake/synthetic:** no real passwords, people or data.
 - **Attacks only inside the testbed**, never against real systems. Physical outputs are harmless (LED, buzzer).
 - **All data in one dataset must come from the same setup** (same AI model, same kind of machine). Otherwise the detector learns the setup instead of the attack.
+- **Attacks are recorded in small blocks mixed in time with normal sessions**, and one variant of each attack (V4) is kept unseen for testing.
+- **An attack that never reached its target is thrown out, not labelled.**
 - **Recordings go to Google Drive, not GitHub.** Check copies with the SHA-256 fingerprints.
 - The full rules are in [Rules — Must Follow](#rules--must-follow-both-team-members) above and in [`docs/attack-dataset-contract.md`](docs/attack-dataset-contract.md).
 
@@ -438,7 +479,10 @@ $env:AGENTNET_OLLAMA_URL = "http://127.0.0.1:11500"
 | **Dataset** | The collection of all labelled sessions |
 | **Manifest** | The spreadsheet with one label row per session |
 | **Seed** | A number that makes a "random" session repeatable |
-| **Batch / run** | A group of 250 sessions collected together |
+| **Batch / run** | A group of sessions collected together (250 for the normal collection, 25 for the attack collection); training and test data are split by run |
+| **Variant** | One version of an attack (V1–V4), e.g. a different way of hiding the same malicious instruction |
+| **Held-out variant** | A variant never shown to the detector during training, used to test whether it recognises new versions of an attack |
+| **Attack profile** | The small local settings file that tells the test servers how to misbehave during one attack session |
 | **SHA-256 / fingerprint** | A code computed from a file; if the file changes even slightly, the code changes |
 | **LLM** | Large Language Model, the AI "brain" (here llama3.1, run by Ollama) |
 | **Testbed** | The safe, isolated fake lab where everything runs |

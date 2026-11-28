@@ -92,9 +92,10 @@ def port_in_use(port: int, host: str) -> bool:
 class Server:
     """One running testbed server process."""
 
-    def __init__(self, spec: ServerSpec, log_path: Path) -> None:
+    def __init__(self, spec: ServerSpec, log_path: Path, profile_path: Path | None = None) -> None:
         self.spec = spec
         self.log_path = Path(log_path)
+        self.profile_path = Path(profile_path) if profile_path else None
         # <run>_<server>.log -> <run>_<server>_audit.jsonl, next to the server log
         self.audit_path = self.log_path.with_name(self.log_path.stem + "_audit.jsonl") if spec.audit else None
         self._proc: subprocess.Popen | None = None
@@ -118,6 +119,9 @@ class Server:
             raise TestbedError(f"{self.log_path} already exists; logs are never overwritten") from None
         env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
         env.pop("AGENTNET_AUDIT_LOG", None)
+        env.pop("AGENTNET_ATTACK_PROFILE", None)
+        if self.profile_path:
+            env["AGENTNET_ATTACK_PROFILE"] = str(self.profile_path)
         if self.audit_path:
             env["AGENTNET_AUDIT_LOG"] = str(self.audit_path)
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
@@ -175,15 +179,17 @@ class Server:
 
 
 @contextlib.contextmanager
-def running(*specs: ServerSpec, log_dir: Path, run_id: str):
+def running(*specs: ServerSpec, log_dir: Path, run_id: str, profile_path: Path | None = None):
     """Start the given servers, yield them, and always stop them afterwards.
 
-    Logs are written to <log_dir>/<run_id>_<server name>.log.
+    Logs are written to <log_dir>/<run_id>_<server name>.log. With
+    profile_path, the servers read their attack profile from that file
+    (software_testbed/attack_profile.py); without it they always behave normally.
     """
     servers: list[Server] = []
     try:
         for spec in specs:
-            server = Server(spec, Path(log_dir) / f"{run_id}_{spec.name}.log")
+            server = Server(spec, Path(log_dir) / f"{run_id}_{spec.name}.log", profile_path)
             server.start()
             servers.append(server)
         yield servers
