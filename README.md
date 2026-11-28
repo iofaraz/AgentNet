@@ -316,21 +316,28 @@ Try it yourself (start the tool server in one terminal, then run the agent in an
   6. **Two settings were fixed so every machine runs the model the same way:**
      - the address of the AI model is now a setting (`AGENTNET_OLLAMA_URL`),
      - the model's memory window (context) is fixed at 8,192 tokens. Before, each computer chose its own: 4k on one, 32k on another.
-  7. **Results on the GPU (status on 27 Nov 2026):**
+  7. **Results on the GPU (status on 28 Nov 2026):**
 
      | Batch | Result |
      |---|---|
      | `S-BENIGN3-01` | 250/250 valid, 25 min (CPU needed 1 h 15 min) |
      | `S-BENIGN3-02` | 250/250 valid; paused halfway while travelling and resumed later |
      | `S-BENIGN3-03` | 250/250 valid, 21 min |
-     | `S-BENIGN3-04` onwards | running |
+     | `S-BENIGN3-04` | 250/250 valid, 25 min (1 session redone) |
+     | `S-BENIGN3-05` – `07` | 250/250 valid each, about 21–22 min each |
+     | `S-BENIGN3-08` | 250/250 valid; stopped twice when the pipe to the lab computer closed, then resumed |
+     | `S-BENIGN3-09` – `10` | running (2,171 of 2,500 sessions valid so far) |
 
      - **Speed:** about 5 seconds per session.
-     - **Failures:** only 1 session had to be redone, because it got stuck once.
+     - **Failures:** apart from the pipe drops (see 10 below), only 2 sessions had to be redone: one got stuck once, and one had a one-off error.
      - **Checks and backup:** every batch passed the full check and was backed up to Google Drive.
      - **Multi-step AI sessions:** 23–35% per batch, rising as batches go on.
   8. **Fix: resuming a half-finished batch.** The test servers' log files from the first half already existed, and logs are never overwritten. Now a resumed batch writes extra logs named `…_part2_…` next to the first ones.
   9. **Timing note for the attack step:** the same kind of AI session got slightly faster from batch to batch (about 2.5 s → 1.9 s), most likely because other people sometimes use the shared lab GPU. So attacks should be recorded **in small blocks mixed in time with normal sessions**, not all on one day. Otherwise a detector could learn "slow = attack".
+  10. **Fix: the pipe to the lab computer can drop.** It closed twice during `S-BENIGN3-08`, for example when the laptop slept or the network changed.
+      - **Problem before:** the collector kept trying sessions without the AI model. Each try failed and used up one of the slot's 3 chances, until 5 failures in a row stopped the batch. 4 sessions used up all their chances without ever reaching the model.
+      - **Now:** after a failed AI session, the collector checks whether the model answers. If not, it **pauses and waits up to 2 hours** for the pipe to come back, and tries made while the pipe was down **don't count**.
+      - **The 4 sessions:** the 16 tries made during the two drops were marked "pipe was down", so they got a fresh chance and the batch kept its exact mix. The failed recordings stay on record; nothing was deleted.
 - **Commands:**
   ```powershell
   .venv\Scripts\python scripts\collect.py plan        # show the full schedule
@@ -378,7 +385,7 @@ $env:AGENTNET_OLLAMA_URL = "http://127.0.0.1:11500"
 
 | Step | What it means in plain words | Roadmap phase |
 |---|---|---|
-| **3.2 (finish)** | Record the remaining normal batches (`S-BENIGN3-04` … `10`) on the lab GPU, check them, back them up, and write the summary | 5 |
+| **3.2 (finish)** | Finish the last normal batches (`S-BENIGN3-09`, `10`) on the lab GPU, run the final check of all 2,500, back them up, and write the summary | 5 |
 | **4. Attacks** | Build a safe "attack simulator", then record each of the 7 attacks: tool poisoning, rug pull, prompt injection via tool output, confused deputy, data exfiltration, agent card spoofing, and unauthorized device control. Attacks use the **same users, mix and timing** as normal traffic, so the detector must learn the attack itself, not side effects. Failed attacks are recorded too. | 6 |
 | **5. Encrypted traffic** | Repeat sessions over HTTPS (encrypted), where the content can't be read, only sizes and timing | 9 |
 | **6. Dataset pipeline** | Turn recordings into a table of numbers (packet sizes, timing, tool-call sequences); merge the labels; run quality checks; split into training and test parts **by batch** | 7 |
@@ -409,6 +416,8 @@ $env:AGENTNET_OLLAMA_URL = "http://127.0.0.1:11500"
 | `5 sessions in a row were excluded` | Something is broken (often Ollama has stopped). Fix it, then run the same command again; it resumes |
 | Port already in use | A server from an earlier run is still open; close that terminal or restart the PC |
 | `cannot reach Ollama at http://127.0.0.1:11500` | The pipe to the lab computer is closed. Open it again (window 1 above) and approve the Tailscale login page if one appears |
+| `LLM backend unreachable - waiting …` | Normal: the pipe dropped and the collector is waiting. Reopen the pipe; it continues by itself within a few seconds |
+| The pipe program runs, but port 11500 still doesn't answer | Look at the pipe window: Tailscale shows a `login.tailscale.com` link to approve. Open it and approve |
 | The pipe window shows nothing, but the check fails | Tailscale is waiting for a login approval in the browser, or Tailscale is switched off on the laptop |
 | `… already exists; logs are never overwritten` | Fixed: a resumed batch now gets `…_part2_…` logs. Update your code (`git pull`) |
 
